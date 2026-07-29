@@ -65,7 +65,6 @@ class WorkSpaceStorage: ObservableObject {
     }
 
     init(url: URL) {
-        let url = url.resolvingSymlinksInPath()
         let localFS = LocalFileSystemProvider()
         localFS.gitServiceProvider = LocalGitServiceProvider(root: url)
 
@@ -217,6 +216,43 @@ class WorkSpaceStorage: ObservableObject {
                     return
                 }
                 self.updateDirectory(name: "SFTP", url: baseURL.absoluteString)
+            }
+        case "android":
+            guard case .plainUsernamePassword(let credentials) = authenticationMode,
+                let token = credentials.password
+            else {
+                completionHandler(FSError.UnsupportedAuthenticationMethod)
+                return
+            }
+            guard
+                let fs = AndroidFileSystemProvider(
+                    baseURL: host,
+                    token: token,
+                    didDisconnect: { [weak self] _ in
+                        self?.disconnect()
+                    },
+                    onFileChanged: { [weak self] changedURL in
+                        guard let self else { return }
+                        self.requestDirectoryUpdateAt(
+                            id: changedURL.deletingLastPathComponent().absoluteString,
+                            forceUpdate: true)
+                        self.onDirectoryChangeAction?(changedURL.absoluteString)
+                    })
+            else {
+                completionHandler(FSError.InvalidHost)
+                return
+            }
+
+            Task {
+                do {
+                    try await fs.ping()
+                } catch {
+                    completionHandler(error)
+                    return
+                }
+                self.fss[host.scheme!] = fs
+                self.updateDirectory(name: "Android", url: host.absoluteString)
+                completionHandler(nil)
             }
         default:
             completionHandler(FSError.SchemeNotRegistered)
@@ -413,7 +449,7 @@ extension WorkSpaceStorage {
             subFolderItems != nil
         }
         var _url: URL? {
-            URL(string: url)?.resolvingSymlinksInPath()
+            URL(string: url)
         }
 
         init(name: String? = nil, url: String, isDirectory: Bool) {
