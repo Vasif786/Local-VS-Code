@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		569080974B7EFA0742190FC4 /* RemoteExecutionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */; };
+		778E5104343E2BB04B166DF9 /* RemoteRunExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */; };
 		940C68252C646E0400089EA3 /* System.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940C68242C646E0400089EA3 /* System.swift */; };
 		940C68262C64704C00089EA3 /* String+toCString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 949B3CC425DEA89A00BC83B5 /* String+toCString.swift */; };
 		940C68272C65D36700089EA3 /* commandDictionary.plist in Resources */ = {isa = PBXBuildFile; fileRef = 948D11FF2583F20C008F877A /* commandDictionary.plist */; };
@@ -1406,6 +1408,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RemoteExecutionManager.swift; path = CodeApp/Managers/RemoteExecutionManager.swift; sourceTree = "<group>"; };
 		4F30816829662CBF002708FD /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
 		4F30816929662D58002708FD /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		73F80B0F2850F7E5000EF3FC /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -2029,6 +2032,7 @@
 		9FDAD1B8296EAC3C00E8AEB2 /* SourceControlTemplateSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceControlTemplateSection.swift; sourceTree = "<group>"; };
 		9FE3E292298A14BC00F63DD0 /* CodeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9FE3E294298A14BC00F63DD0 /* CodeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeUITests.swift; sourceTree = "<group>"; };
+		F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RemoteRunExtension.swift; path = CodeApp/Managers/RemoteRunExtension.swift; sourceTree = "<group>"; };
 		FFD081B72925F8FB001D9373 /* TextEditorWithPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextEditorWithPlaceholder.swift; sourceTree = "<group>"; };
 		FFD081BA29260B00001D9373 /* Libgit2Error.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Libgit2Error.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -3163,6 +3167,8 @@
 				9434C3EE2BA2CCBB00EB1CF6 /* WASMService.swift */,
 				949D78842C33DA48006D7480 /* AppExtensionService.swift */,
 				949CDF492C6658DC00FFC5B1 /* LanguageService.swift */,
+				F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */,
+				048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -3966,6 +3972,8 @@
 				94FE0C94281E50F200C05529 /* UserDefaults+Hosts.swift in Sources */,
 				9F062FE62B58D40D006210AA /* FileTreeViewController.swift in Sources */,
 				9F046C322922203E00BDE4E9 /* ToolbarManager.swift in Sources */,
+				778E5104343E2BB04B166DF9 /* RemoteRunExtension.swift in Sources */,
+				569080974B7EFA0742190FC4 /* RemoteExecutionManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
