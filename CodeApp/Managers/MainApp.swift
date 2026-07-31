@@ -195,6 +195,7 @@ class MainApp: ObservableObject {
     var monacoStateToRestore: String? = nil
 
     let terminalManager: TerminalManager
+    let remoteExecutionManager = RemoteExecutionManager()
     var monacoInstance: EditorImplementation! = nil
 
     var editorTypesMonitor: FolderMonitor? = nil
@@ -245,6 +246,13 @@ class MainApp: ObservableObject {
             }
         }.store(in: &cancellables)
 
+        // Forward remoteExecutionManager changes to MainApp so UI updates
+        remoteExecutionManager.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.objectWillChange.send()
+            }
+        }.store(in: &cancellables)
+
         // TODO: Support deleted files detection for remote files
         workSpaceStorage.onDirectoryChange { [weak self] url in
             DispatchQueue.main.async {
@@ -263,6 +271,11 @@ class MainApp: ObservableObject {
             // Use the tracked remote terminal for consistent data routing
             if let terminal = self.terminalManager.remoteTerminal {
                 terminal.write(data: data)
+                // Let the Run/Stop feature watch for its completion marker in
+                // the same stream, without opening a second data path.
+                Task { @MainActor in
+                    self.remoteExecutionManager.ingestRemoteOutput(data)
+                }
             } else {
                 logger.warning(
                     "Remote terminal data dropped: no remote terminal available (\(data.count) bytes)"
@@ -272,6 +285,7 @@ class MainApp: ObservableObject {
         workSpaceStorage.onRemoteDisconnect { [weak self] in
             guard let self = self else { return }
             Task { @MainActor in
+                self.remoteExecutionManager.handleDisconnect()
                 let documentDir = getRootDirectory()
                 self.loadFolder(url: documentDir)
             }

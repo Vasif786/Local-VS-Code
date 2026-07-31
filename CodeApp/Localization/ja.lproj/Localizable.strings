@@ -8,7 +8,7 @@
 
 "Welcome Message" =
 "# Code App
-##### **v1.12.2 (2026 年 7 月)**
+##### **v1.12.1 (2026 年 3 月)**
 #### 開始
 [新しいファイル](https://thebaselab.com/code/newfile)
 [ファイルを開く](https://thebaselab.com/code/openfile)
@@ -22,12 +22,7 @@
 ";
 
 "Changelog.message" =
-"### 1.12.2 (2026 年 6 月)
-- Git GUI の不具合を修正
-- トルコ語サポート
-- 貢献してくれた @iEmirRekt に特別感謝
-
-### 1.12.1 (2026 年 3 月)
+"### 1.12.1 (2026 年 3 月)
 - SSH ディレクトリの不具合を修正
 
 ### 1.12.0 (Feburary 2026)
@@ -443,7 +438,7 @@
 "Staged Changes" = "ステージされている変更";
 "No changes are made in the working directory." = "作業ディレクトリに変更はありません。";
 "Git checkout: Uncommitted Changes" = "Git チェックアウト: コミットされていない変更";
-"Uncommitted changes will be lost. Do you wish to proceed?" = "コミットされていない変更は失われます。続行しますか？";
+"Uncommited changes will be lost. Do you wish to proceed?" = "コミットされていない変更は失われます。続行しますか？";
 "No changes are made in this file" = "このファイルは変更されていません";
 
 "Smooth Scrolling" = "滑らかなスクロール";

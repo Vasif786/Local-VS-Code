@@ -36,7 +36,6 @@ struct RemoteCreateSection: View {
     @State var hasSSHKey = true
     @State var usesJumpServer = false
     @State var jumpServerUrl: String? = nil
-    @State var reconnectAutomatically: Bool = false
 
     @FocusState var focusedField: Field?
 
@@ -65,18 +64,14 @@ struct RemoteCreateSection: View {
             return
         }
 
-        if serverType != .android {
-            guard !username.isEmpty else {
-                App.notificationManager.showErrorMessage("Username cannot be empty.")
-                focusedField = .username
-                return
-            }
+        guard !username.isEmpty else {
+            App.notificationManager.showErrorMessage("Username cannot be empty.")
+            focusedField = .username
+            return
         }
 
         guard !password.isEmpty || usesPrivateKey else {
-            App.notificationManager.showErrorMessage(
-                serverType == .android
-                    ? "Auth token cannot be empty." : "Password cannot be empty.")
+            App.notificationManager.showErrorMessage("Password cannot be empty.")
             focusedField = .password
             return
         }
@@ -92,14 +87,12 @@ struct RemoteCreateSection: View {
 
         let privateKeyContentKeyChainId = UUID().uuidString
         let cred = URLCredential(
-            user: serverType == .android ? "android" : username, password: password,
-            persistence: .none)
+            user: username, password: password, persistence: .none)
         let remoteHost = RemoteHost(
             url: url.absoluteString,
             useKeyAuth: false,
             privateKeyContentKeychainID: usesPrivateKey ? privateKeyContentKeyChainId : nil,
-            jumpServerUrl: usesJumpServer ? jumpServerUrl : nil,
-            reconnectAutomatically: serverType == .android ? reconnectAutomatically : nil
+            jumpServerUrl: usesJumpServer ? jumpServerUrl : nil
         )
 
         if usesPrivateKey {
@@ -139,8 +132,6 @@ struct RemoteCreateSection: View {
                         ForEach(RemoteType.allCases, id: \.self) { type in
                             if type == .sftp {
                                 Text("SSH")
-                            } else if type == .android {
-                                Text("Android")
                             } else {
                                 Text(type.rawValue.uppercased())
                             }
@@ -173,17 +164,15 @@ struct RemoteCreateSection: View {
                             .keyboardType(.numberPad)
                     }
 
-                    if serverType != .android {
-                        HStack {
-                            Image(systemName: "person")
-                                .foregroundColor(.gray)
-                                .font(.subheadline)
+                    HStack {
+                        Image(systemName: "person")
+                            .foregroundColor(.gray)
+                            .font(.subheadline)
 
-                            TextField("Username", text: $username)
-                                .focused($focusedField, equals: .username)
-                                .disableAutocorrection(true)
-                                .autocapitalization(.none)
-                        }
+                        TextField("Username", text: $username)
+                            .focused($focusedField, equals: .username)
+                            .disableAutocorrection(true)
+                            .autocapitalization(.none)
                     }
 
                     if usesPrivateKey {
@@ -234,8 +223,7 @@ struct RemoteCreateSection: View {
                             .font(.subheadline)
 
                         SecureField(
-                            serverType == .android
-                                ? "Auth Token" : (usesPrivateKey ? "Key passphrase" : "Password"),
+                            usesPrivateKey ? "Key passphrase" : "Password",
                             text: $password
                         )
                         .focused($focusedField, equals: .password)
@@ -290,10 +278,6 @@ struct RemoteCreateSection: View {
 
             Toggle("Remember address", isOn: $saveAddress)
 
-            if serverType == .android {
-                Toggle("Reconnect Automatically", isOn: $reconnectAutomatically)
-            }
-
             if App.deviceSupportsBiometricAuth {
                 Toggle("Remember credentials", isOn: $saveCredentials)
             }
@@ -313,13 +297,9 @@ struct RemoteCreateSection: View {
             }
 
         }.onChange(of: serverType) { value in
-            switch value {
-            case .sftp:
+            if value == .sftp {
                 port = "22"
-            case .android:
-                usesPrivateKey = false
-                port = "8080"
-            default:
+            } else {
                 usesPrivateKey = false
                 port = "21"
             }

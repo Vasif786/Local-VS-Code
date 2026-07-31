@@ -27,6 +27,7 @@ class ExtensionManager: ObservableObject {
         SourceControlAuxiliaryExtension(),
         SimpleWebPreviewExtension(),
         RemoteAuxiliaryExtension(),
+        RemoteRunExtension(),
     ]
 
     func registerExtension(ex: CodeAppExtension) {

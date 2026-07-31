@@ -16,6 +16,8 @@ struct ToolbarItem: Identifiable {
     var shortCut: KeyboardShortcut?
     var panelToFocusOnTap: String?
     var shouldDisplay: (MainApp) -> Bool
+    /// Defaults to always-enabled so existing contributions compile unchanged.
+    var isEnabled: (MainApp) -> Bool = { _ in true }
 }
 
 class ToolbarManager: CodeAppContributionPointManager {

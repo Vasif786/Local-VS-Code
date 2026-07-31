@@ -2,7 +2,7 @@
 //  RemoteType.swift
 //  Code
 //
-//  Created by Ken Chung 10/11/2022.
+//  Created by Ken Chung on 10/11/2022.
 //
 
 import Foundation
@@ -11,7 +11,6 @@ enum RemoteType: String, CaseIterable, Identifiable {
     case sftp
     case ftp
     case ftps
-    case android
     var id: String { self.rawValue }
 }
 
@@ -22,10 +21,6 @@ struct RemoteHost: Codable {
     var privateKeyContentKeychainID: String?
     var privateKeyPath: String?
     var jumpServerUrl: String?
-    // Added for Android LAN remote support: reconnect silently on relaunch
-    // if this was the last-opened workspace. Optional so previously-saved
-    // hosts (encoded before this field existed) still decode correctly.
-    var reconnectAutomatically: Bool? = nil
 
     var rowDisplayName: String {
         displayName ?? URL(string: self.url)?.host ?? ""
