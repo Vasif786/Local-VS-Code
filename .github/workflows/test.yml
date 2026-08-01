@@ -1,20 +1,77 @@
-name: Tests
+name: Build Payload 7Z
+
 on:
-  pull_request:
-    branches:
-      - "*"
-      - "!gitbook"
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  Linting:
-    runs-on: macOS-26
+  build:
+    runs-on: macos-14
+
     steps:
-      - uses: actions/checkout@v3
-      - name: Install swift-format
-        run: brew install swift-format
-      - name: Linting
-        run: swift-format lint -r -s ./CodeApp ./Extensions ./CodeUITests
-      - name: Unit Tests
-        run: fastlane tests
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Xcode Version
+        run: xcodebuild -version
+
+      - name: Download Frameworks
+        run: |
+          chmod +x downloadFrameworks.sh
+          ./downloadFrameworks.sh
+
+      - name: Build Archive
+        run: |
+          PROJECT=$(find . -name "*.xcodeproj" | head -n 1)
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "Code App" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/CodeApp.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            archive
+
+      - name: Create Payload
+        run: |
+          rm -rf Payload
+          mkdir Payload
+          cp -R build/CodeApp.xcarchive/Products/Applications/*.app Payload/
+          du -sh Payload
+
+      - name: Install 7-Zip
+        run: |
+          brew install p7zip
+
+      - name: Compress Payload (Maximum Compression)
+        run: |
+          7z a \
+            -t7z \
+            -m0=lzma2 \
+            -mx=9 \
+            -mfb=273 \
+            -md=1536m \
+            -mmt=on \
+            -ms=on \
+            -myx=9 \
+            Payload.7z \
+            Payload
+
+          ls -lh Payload.7z
+
+      - name: Upload Payload 7Z
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Payload 7Z
+          files: |
+            Payload.7z
         env:
-          XCODE_PATH: "/Applications/Xcode_26.2.app"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
