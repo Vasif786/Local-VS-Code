@@ -64,7 +64,10 @@ struct RemoteRunTarget: Identifiable, Equatable {
 
 enum RemoteExecutionState: Equatable {
     case idle
-    case running(startedAt: Date)
+    /// `command` is the exact shell command that was sent — surfaced in the
+    /// status bar so it's immediately visible (no guessing) which file/command
+    /// actually got picked up by Run.
+    case running(startedAt: Date, command: String)
     case finished(exitCode: Int32, duration: TimeInterval)
     case failed(message: String)
 }
@@ -83,6 +86,7 @@ final class RemoteExecutionManager: ObservableObject {
     private var runStartedAt: Date?
     private var currentToken: String?
     private var outputBuffer = ""
+    private var pendingStopTimeout: DispatchWorkItem?
 
     var isRunning: Bool {
         if case .running = state { return true }
@@ -139,7 +143,7 @@ final class RemoteExecutionManager: ObservableObject {
             targets.append(RemoteRunTarget(title: "Cargo Run", command: "cargo run"))
         }
         if await fileExists(app: app, root: root, relativePath: "pubspec.yaml") {
-            targets.append(RemoteRunTarget(title: "Flutter Run", command: "flutter run"))
+            targets.append(RemoteRunTarget(title: "Flutter Run", command: "flutter run -d web-server"))
         }
         return targets
     }
@@ -233,9 +237,19 @@ final class RemoteExecutionManager: ObservableObject {
             fail("Couldn't determine the remote project's root directory.")
             return
         }
-        guard let command = command(forFileURL: editor.url, root: rootURL) else {
+        guard var command = command(forFileURL: editor.url, root: rootURL) else {
             fail("This file type can't be executed.")
             return
+        }
+
+        // A .dart file inside a Flutter project's lib/ folder isn't run with
+        // plain `dart file.dart` — the project as a whole is run instead.
+        if SupportedLanguage.detect(fileExtension: editor.url.pathExtension) == .dart {
+            let relative = relativePath(of: editor.url, root: rootURL)
+            let isInsideLib = relative == "lib" || relative.hasPrefix("lib/")
+            if isInsideLib, await fileExists(app: app, root: rootURL, relativePath: "pubspec.yaml") {
+                command = "flutter run -d web-server"
+            }
         }
 
         await app.saveCurrentFile()
@@ -265,11 +279,14 @@ final class RemoteExecutionManager: ObservableObject {
     }
 
     private func run(command: String, rootPath: String, terminal: TerminalInstance) {
+        pendingStopTimeout?.cancel()
+        pendingStopTimeout = nil
+
         let token = UUID().uuidString
         currentToken = token
         outputBuffer = ""
         runStartedAt = Date()
-        state = .running(startedAt: runStartedAt!)
+        state = .running(startedAt: runStartedAt!, command: command)
 
         let quotedRoot = shellQuoted(rootPath.isEmpty ? "/" : rootPath)
         // Never run from HOME: always cd into the project root first.
@@ -286,9 +303,26 @@ final class RemoteExecutionManager: ObservableObject {
 
     /// Entry point for the toolbar's Stop button. Sends Ctrl+C through the
     /// same SSH shell via the terminal's existing interrupt mechanism.
+    ///
+    /// Ctrl+C only interrupts the foreground process — it does not guarantee
+    /// the shell will still echo this run's completion marker afterwards
+    /// (e.g. if the interrupted program leaves the shell in an odd state).
+    /// Without a fallback, the button could stay stuck on "Stop" forever, and
+    /// every further tap would just resend Ctrl+C instead of starting a new
+    /// run. To prevent that, arm a short grace period: if the marker hasn't
+    /// shown up shortly after Stop was pressed, force the state back to idle
+    /// so Run works again on the next tap.
     func stop(app: MainApp) {
-        guard isRunning else { return }
+        guard isRunning, let token = currentToken else { return }
         app.terminalManager.remoteTerminal?.sendInterrupt()
+
+        pendingStopTimeout?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self = self, self.currentToken == token else { return }
+            self.fail("Cancelled.")
+        }
+        pendingStopTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: timeout)
     }
 
     // MARK: Completion detection
@@ -332,6 +366,8 @@ final class RemoteExecutionManager: ObservableObject {
     }
 
     private func resetRunTracking() {
+        pendingStopTimeout?.cancel()
+        pendingStopTimeout = nil
         currentToken = nil
         runStartedAt = nil
     }

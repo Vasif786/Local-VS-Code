@@ -83,9 +83,11 @@ private struct RemoteRunStatusView: View {
         switch manager.state {
         case .idle:
             EmptyView()
-        case .running:
-            Text("Running…")
+        case .running(_, let command):
+            Text("Running: \(command)")
                 .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.middle)
                 .foregroundColor(Color.init("statusBar.foreground"))
         case .finished(let exitCode, let duration):
             Text("Finished · Exit \(exitCode) · \(String(format: "%.1fs", duration))")
