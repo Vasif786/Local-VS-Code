@@ -8,11 +8,9 @@ permissions:
 
 jobs:
   build:
-
     runs-on: macos-14
 
     steps:
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -23,16 +21,12 @@ jobs:
         run: xcodebuild -version
 
       - name: Download Frameworks
-
         run: |
-
           chmod +x downloadFrameworks.sh
           ./downloadFrameworks.sh
 
       - name: Build Archive
-
         run: |
-
           PROJECT=$(find . -name "*.xcodeproj" | head -n 1)
 
           echo "PROJECT=$PROJECT"
@@ -48,41 +42,39 @@ jobs:
             archive
 
       - name: Create IPA
-
         run: |
-
           mkdir Payload
-
           cp -R build/CodeApp.xcarchive/Products/Applications/*.app Payload/
-
           cd Payload
-
           zip -r ../CodeApp.ipa .
-
           cd ..
-
           ls -lh CodeApp.ipa
 
-      - name: Compress IPA To ZIP
-
+      - name: Install 7-Zip
         run: |
+          brew update
+          brew install p7zip
 
-          zip -r CodeApp-Unsigned.zip CodeApp.ipa
+      - name: Compress IPA to 7Z (Maximum Compression)
+        run: |
+          7z a \
+            -t7z \
+            -m0=lzma2 \
+            -mx=9 \
+            -mfb=273 \
+            -md=256m \
+            -ms=on \
+            CodeApp-Unsigned.7z \
+            CodeApp.ipa
 
-          ls -lh CodeApp-Unsigned.zip
+          ls -lh CodeApp-Unsigned.7z
 
-      - name: Upload ZIP Release
-
+      - name: Upload 7Z Release
         uses: softprops/action-gh-release@v2
-
         with:
-
           tag_name: build-${{ github.run_number }}
-
           name: Unsigned IPA
-
           files: |
-            CodeApp-Unsigned.zip
-
+            CodeApp-Unsigned.7z
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
