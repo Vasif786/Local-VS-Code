@@ -73,9 +73,10 @@ class RemoteRunExtension: CodeAppExtension {
     }
 }
 
-/// Status bar contents for the Run/Stop feature: Running… / Finished (exit
-/// code, duration) / an error message. Reactive on its own via
-/// `@ObservedObject`, independent of the toolbar re-registration above.
+/// Status bar contents for the Run/Stop feature: Running / Finished (exit
+/// code, duration) / an error message — shown as a small icon + label pill,
+/// not raw command text. Reactive on its own via `@ObservedObject`,
+/// independent of the toolbar re-registration above.
 private struct RemoteRunStatusView: View {
     @ObservedObject var manager: RemoteExecutionManager
 
@@ -83,20 +84,32 @@ private struct RemoteRunStatusView: View {
         switch manager.state {
         case .idle:
             EmptyView()
-        case .running(_, let command):
-            Text("Running: \(command)")
-                .font(.system(size: 12))
+        case .running(_, let label):
+            badge(systemImage: "play.circle.fill", text: label, color: .blue)
+        case .finished(let exitCode, let duration):
+            badge(
+                systemImage: exitCode == 0 ? "checkmark.circle.fill" : "xmark.circle.fill",
+                text: "Exit \(exitCode) · \(String(format: "%.1fs", duration))",
+                color: exitCode == 0 ? .green : .red
+            )
+        case .failed(let message):
+            badge(systemImage: "exclamationmark.triangle.fill", text: message, color: .red)
+        }
+    }
+
+    private func badge(systemImage: String, text: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+            Text(text)
+                .font(.system(size: 12, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .foregroundColor(Color.init("statusBar.foreground"))
-        case .finished(let exitCode, let duration):
-            Text("Finished · Exit \(exitCode) · \(String(format: "%.1fs", duration))")
-                .font(.system(size: 12))
-                .foregroundColor(Color.init("statusBar.foreground"))
-        case .failed(let message):
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundColor(.red)
         }
+        .foregroundColor(color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.12))
+        .clipShape(Capsule())
     }
 }

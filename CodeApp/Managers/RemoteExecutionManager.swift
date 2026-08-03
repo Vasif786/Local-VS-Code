@@ -15,11 +15,21 @@
 //    `TerminalInstance.userContentController(_:didReceive:)`.
 //  - Stopping reuses `TerminalInstance.sendInterrupt()`, the exact method
 //    already used elsewhere to send Ctrl+C.
-//  - Output is read from the same `Data` MainApp already forwards from
-//    `WorkSpaceStorage.onTerminalData` to `TerminalInstance.write(data:)` —
-//    this manager only observes a copy of that stream to find the
-//    completion marker it appends to its own command; it never writes to
-//    the terminal view itself.
+//
+//  Clean terminal output: rather than typing a long `cd ... && cmd; echo
+//  marker` line (which the shell echoes back verbatim, cluttering the
+//  terminal with paths and marker text), the real command is written to a
+//  small hidden script on the remote host via the app's existing SFTP
+//  write API, and only a single short line is ever typed:
+//
+//      bash '.codeapp_run.sh'
+//
+//  The script itself writes its exit code to a hidden file
+//  (`.codeapp_run.exit`) instead of echoing it — completion is detected by
+//  quietly polling for that file over SFTP (the same `WorkSpaceStorage`
+//  API the file explorer already uses), never by scanning terminal text.
+//  So the terminal shows just that one clean line plus whatever the
+//  program itself actually prints.
 //
 
 import Combine
@@ -64,28 +74,26 @@ struct RemoteRunTarget: Identifiable, Equatable {
 
 enum RemoteExecutionState: Equatable {
     case idle
-    /// `command` is the exact shell command that was sent — surfaced in the
-    /// status bar so it's immediately visible (no guessing) which file/command
-    /// actually got picked up by Run.
-    case running(startedAt: Date, command: String)
+    /// `label` is a short, friendly name (e.g. "v.py", "npm start") shown in
+    /// the status bar — not the raw shell command, so it stays clean.
+    case running(startedAt: Date, label: String)
     case finished(exitCode: Int32, duration: TimeInterval)
     case failed(message: String)
 }
 
 /// - Important: Like `TerminalManager`, access this class only from the main
-///   thread. Callers that may run off the main thread (e.g. SSH data
-///   callbacks) should hop to main first — see the `Task { @MainActor in }`
-///   wrapping used at MainApp's `onTerminalData`/`onRemoteDisconnect` call sites.
+///   thread. Its own internal polling always hops back to the main actor
+///   before touching `state` — see `scheduleNextPoll`.
 final class RemoteExecutionManager: ObservableObject {
 
     @Published private(set) var state: RemoteExecutionState = .idle
 
-    private static let markerPrefix = "__CODEAPP_RUN_DONE__"
-    private static let outputBufferCap = 4096
+    private static let scriptFileName = ".codeapp_run.sh"
+    private static let exitFileName = ".codeapp_run.exit"
+    private static let pollInterval: UInt64 = 600_000_000  // 0.6s, in nanoseconds
 
     private var runStartedAt: Date?
     private var currentToken: String?
-    private var outputBuffer = ""
     private var pendingStopTimeout: DispatchWorkItem?
 
     var isRunning: Bool {
@@ -114,17 +122,11 @@ final class RemoteExecutionManager: ObservableObject {
         guard let root = URL(string: app.workSpaceStorage.currentDirectory.url) else {
             return false
         }
-        // Remote files all live under the same host/scheme as the workspace
-        // root for the duration of one SSH session, so a path-prefix check
-        // is sufficient and avoids assuming anything about the filesystem
-        // provider beyond what WorkSpaceStorage already exposes.
         return url.path == root.path || url.path.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/")
     }
 
     // MARK: Project-level run options (package.json / Cargo.toml / pubspec.yaml)
 
-    /// Extra project-wide targets to offer alongside "run this file", based
-    /// on manifest files at the project root. Empty when none apply.
     func availableProjectRunTargets(app: MainApp) async -> [RemoteRunTarget] {
         guard app.workSpaceStorage.remoteConnected,
             let root = URL(string: app.workSpaceStorage.currentDirectory.url)
@@ -182,8 +184,6 @@ final class RemoteExecutionManager: ObservableObject {
         case .perl: return "perl \(quotedRelative)"
         case .go: return "go run \(quotedRelative)"
         case .rust:
-            // A Cargo project is offered via availableProjectRunTargets();
-            // this is only the fallback for a standalone .rs file.
             return "rustc \(quotedRelative) -o \(quotedBaseNameNoExt) && ./\(quotedBaseNameNoExt)"
         case .java:
             return hasDir
@@ -242,6 +242,8 @@ final class RemoteExecutionManager: ObservableObject {
             return
         }
 
+        var label = editor.url.lastPathComponent
+
         // A .dart file inside a Flutter project's lib/ folder isn't run with
         // plain `dart file.dart` — the project as a whole is run instead.
         if SupportedLanguage.detect(fileExtension: editor.url.pathExtension) == .dart {
@@ -249,6 +251,7 @@ final class RemoteExecutionManager: ObservableObject {
             let isInsideLib = relative == "lib" || relative.hasPrefix("lib/")
             if isInsideLib, await fileExists(app: app, root: rootURL, relativePath: "pubspec.yaml") {
                 command = "flutter run -d web-server"
+                label = "Flutter (web)"
             }
         }
 
@@ -258,7 +261,7 @@ final class RemoteExecutionManager: ObservableObject {
             return
         }
 
-        run(command: command, rootPath: rootURL.path, terminal: terminal)
+        await run(command: command, label: label, root: rootURL, app: app, terminal: terminal)
     }
 
     /// Entry point for running a project-level target (npm/cargo/flutter),
@@ -275,43 +278,74 @@ final class RemoteExecutionManager: ObservableObject {
             fail("Couldn't determine the remote project's root directory.")
             return
         }
-        run(command: projectTarget.command, rootPath: rootURL.path, terminal: terminal)
+        Task {
+            await run(
+                command: projectTarget.command, label: projectTarget.title, root: rootURL, app: app,
+                terminal: terminal)
+        }
     }
 
-    private func run(command: String, rootPath: String, terminal: TerminalInstance) {
+    /// Writes the actual command into a small hidden script on the remote
+    /// host and types only a single short line to run it — keeping the
+    /// terminal free of cd/path/marker clutter. Completion is detected by
+    /// quietly polling for a hidden exit-code file over SFTP, never by
+    /// reading terminal text.
+    private func run(command: String, label: String, root: URL, app: MainApp, terminal: TerminalInstance)
+        async
+    {
         pendingStopTimeout?.cancel()
         pendingStopTimeout = nil
 
         let token = UUID().uuidString
         currentToken = token
-        outputBuffer = ""
+
+        let scriptURL = root.appendingPathComponent(Self.scriptFileName)
+        let exitURL = root.appendingPathComponent(Self.exitFileName)
+
+        // Clear any leftover exit marker from a previous run before this one
+        // starts, so a stale file can't be mistaken for immediate completion.
+        try? await app.workSpaceStorage.removeItem(at: exitURL)
+
+        let script = """
+            cd \(shellQuoted(root.path)) || exit 1
+            \(command)
+            __codeapp_exit=$?
+            echo "$__codeapp_exit" > \(shellQuoted(Self.exitFileName))
+            exit "$__codeapp_exit"
+            """
+        guard let scriptData = script.data(using: .utf8) else {
+            fail("Couldn't prepare the run script.")
+            return
+        }
+
+        do {
+            try await app.workSpaceStorage.write(
+                at: scriptURL, content: scriptData, atomically: true, overwrite: true)
+        } catch {
+            fail("Couldn't write the run script to the remote project.")
+            return
+        }
+
+        guard currentToken == token else { return }  // stopped/replaced while writing
+
         runStartedAt = Date()
-        state = .running(startedAt: runStartedAt!, command: command)
+        state = .running(startedAt: runStartedAt!, label: label)
 
-        let quotedRoot = shellQuoted(rootPath.isEmpty ? "/" : rootPath)
-        // Never run from HOME: always cd into the project root first.
-        // The trailing echo carries the exit code inside a unique marker so
-        // completion can be detected without a second connection, a second
-        // terminal, or polling.
-        let line =
-            "cd \(quotedRoot) && \(command); echo \"\(Self.markerPrefix)\(token):$?\"\r"
+        // The only line the terminal ever shows for this run.
+        terminal.type(text: "bash \(shellQuoted(Self.scriptFileName))\r")
 
-        // Sent exactly as if the user had typed it — same call path the
-        // terminal's on-screen keyboard toolbar already uses.
-        terminal.type(text: line)
+        scheduleNextPoll(app: app, token: token, exitURL: exitURL)
     }
 
     /// Entry point for the toolbar's Stop button. Sends Ctrl+C through the
     /// same SSH shell via the terminal's existing interrupt mechanism.
     ///
-    /// Ctrl+C only interrupts the foreground process — it does not guarantee
-    /// the shell will still echo this run's completion marker afterwards
-    /// (e.g. if the interrupted program leaves the shell in an odd state).
-    /// Without a fallback, the button could stay stuck on "Stop" forever, and
-    /// every further tap would just resend Ctrl+C instead of starting a new
-    /// run. To prevent that, arm a short grace period: if the marker hasn't
-    /// shown up shortly after Stop was pressed, force the state back to idle
-    /// so Run works again on the next tap.
+    /// Ctrl+C only interrupts the foreground process — the script may still
+    /// take a moment (or, rarely, fail) to reach its own exit-code write.
+    /// Without a fallback, the button could stay stuck on "Stop" forever. To
+    /// prevent that, arm a short grace period: if the exit file hasn't shown
+    /// up shortly after Stop was pressed, force the state back to idle so
+    /// Run works again on the next tap.
     func stop(app: MainApp) {
         guard isRunning, let token = currentToken else { return }
         app.terminalManager.remoteTerminal?.sendInterrupt()
@@ -322,36 +356,57 @@ final class RemoteExecutionManager: ObservableObject {
             self.fail("Cancelled.")
         }
         pendingStopTimeout = timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: timeout)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timeout)
     }
 
-    // MARK: Completion detection
+    // MARK: Completion detection (silent SFTP polling — never reads terminal text)
 
-    /// Called by MainApp with the same raw `Data` it already forwards from
-    /// `WorkSpaceStorage.onTerminalData` to the terminal view. This manager
-    /// only reads it to find its own completion marker.
-    func ingestRemoteOutput(_ data: Data) {
-        guard isRunning, let token = currentToken else { return }
-        guard let chunk = String(data: data, encoding: .utf8) else { return }
+    private func scheduleNextPoll(app: MainApp, token: String, exitURL: URL) {
+        guard currentToken == token else { return }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.pollInterval)
+            guard let self = self else { return }
+            await self.pollOnce(app: app, token: token, exitURL: exitURL)
+        }
+    }
 
-        outputBuffer += chunk
+    private func pollOnce(app: MainApp, token: String, exitURL: URL) async {
+        guard currentToken == token else { return }  // stopped/finished/replaced meanwhile
 
-        let marker = "\(Self.markerPrefix)\(token):"
-        guard let range = outputBuffer.range(of: marker) else {
-            if outputBuffer.count > Self.outputBufferCap {
-                outputBuffer.removeFirst(outputBuffer.count - Self.outputBufferCap)
+        let exists = (try? await app.workSpaceStorage.fileExists(at: exitURL)) ?? false
+        guard exists else {
+            await MainActor.run { [weak self] in
+                self?.scheduleNextPoll(app: app, token: token, exitURL: exitURL)
             }
             return
         }
 
-        let afterMarker = outputBuffer[range.upperBound...]
-        let digits = afterMarker.prefix { $0.isNumber }
-        guard !digits.isEmpty, let exitCode = Int32(digits) else { return }
+        let exitCode = await readExitCode(app: app, exitURL: exitURL)
+        try? await app.workSpaceStorage.removeItem(at: exitURL)
 
-        let duration = runStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-        state = .finished(exitCode: exitCode, duration: duration)
-        resetRunTracking()
+        await MainActor.run { [weak self] in
+            guard let self = self, self.currentToken == token else { return }
+            let duration = self.runStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+            self.state = .finished(exitCode: exitCode, duration: duration)
+            self.resetRunTracking()
+        }
     }
+
+    private func readExitCode(app: MainApp, exitURL: URL) async -> Int32 {
+        guard let data = try? await app.workSpaceStorage.contents(at: exitURL),
+            let text = String(data: data, encoding: .utf8)
+        else {
+            return -1
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Int32(trimmed) ?? -1
+    }
+
+    /// Called by MainApp's existing `onTerminalData` hook. Completion is now
+    /// detected by silently polling a hidden exit-code file (see above), not
+    /// by scanning terminal text, so this is intentionally unused — kept
+    /// only so that existing call site keeps compiling unchanged.
+    func ingestRemoteOutput(_ data: Data) {}
 
     /// Called by MainApp's existing `onRemoteDisconnect` hook so a run in
     /// progress doesn't get stuck showing "Running…" after the link drops.
