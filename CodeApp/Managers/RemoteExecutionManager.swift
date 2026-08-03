@@ -331,8 +331,10 @@ final class RemoteExecutionManager: ObservableObject {
         runStartedAt = Date()
         state = .running(startedAt: runStartedAt!, label: label)
 
-        // The only line the terminal ever shows for this run.
-        terminal.type(text: "bash \(shellQuoted(Self.scriptFileName))\r")
+        // The only line the terminal ever shows for this run. Use the
+        // script's absolute path — the terminal shell's own cwd is not
+        // guaranteed to already be the project root.
+        terminal.type(text: "bash \(shellQuoted(scriptURL.path))\r")
 
         scheduleNextPoll(app: app, token: token, exitURL: exitURL)
     }
