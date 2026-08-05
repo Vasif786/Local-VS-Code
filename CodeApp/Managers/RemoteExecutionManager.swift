@@ -146,7 +146,7 @@ final class RemoteExecutionManager: ObservableObject {
             targets.append(RemoteRunTarget(title: "Cargo Run", command: "cargo run"))
         }
         if await fileExists(app: app, root: root, relativePath: "pubspec.yaml") {
-            targets.append(RemoteRunTarget(title: "Flutter Run", command: "krinry flutter run web"))
+            targets.append(RemoteRunTarget(title: "Flutter Run", command: "flutter run -d web-server"))
         }
         return targets
     }
@@ -287,9 +287,10 @@ final class RemoteExecutionManager: ObservableObject {
             {
                 setup.command = "flutter run -d web-server"
                 setup.label = "Flutter (web)"
+                let flutterLabel = setup.label  // snapshot: can't capture a `var` in a @Sendable closure
                 await MainActor.run {
                     guard self.currentToken == "pending" else { return }  // stopped meanwhile
-                    self.state = .running(startedAt: self.runStartedAt ?? Date(), label: setup.label)
+                    self.state = .running(startedAt: self.runStartedAt ?? Date(), label: flutterLabel)
                 }
             }
         }
