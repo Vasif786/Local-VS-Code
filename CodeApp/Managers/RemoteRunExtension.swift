@@ -34,8 +34,11 @@ class RemoteRunExtension: CodeAppExtension {
 
         // ToolbarItem's icon is fixed at registration time, so swap the
         // registered item whenever the run/stop state actually changes.
+        // `.receive(on: DispatchQueue.main)` guarantees this always runs on
+        // the main thread even if something upstream ever changes.
         app.remoteExecutionManager.$state
             .removeDuplicates()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self, weak app] _ in
                 guard let self = self, let app = app else { return }
                 self.registerToolbarItem(app: app, contribution: contribution)
@@ -57,7 +60,9 @@ class RemoteRunExtension: CodeAppExtension {
                 if app.remoteExecutionManager.isRunning {
                     app.remoteExecutionManager.stop(app: app)
                 } else {
-                    Task { await app.remoteExecutionManager.runCurrentFile(app: app) }
+                    Task { @MainActor in
+                        await app.remoteExecutionManager.runCurrentFile(app: app)
+                    }
                 }
             },
             shouldDisplay: { mainApp in

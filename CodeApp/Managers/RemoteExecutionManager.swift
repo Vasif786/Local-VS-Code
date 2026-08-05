@@ -219,54 +219,101 @@ final class RemoteExecutionManager: ObservableObject {
     /// Entry point for the toolbar's Run button when running the currently
     /// open file. Saves the editor first and only runs once saving has
     /// completed; never runs unsaved code.
+    ///
+    /// - Important (crash safety): after an `await`, Swift does NOT guarantee
+    ///   execution resumes on the main thread — it can resume on a
+    ///   background thread from the cooperative pool. Touching `@Published
+    ///   state` or the terminal's WebView from a background thread is what
+    ///   was crashing the app. Every block below that touches `state` or
+    ///   `terminal` is therefore explicitly wrapped in
+    ///   `await MainActor.run { ... }`, regardless of which thread we
+    ///   actually resumed on.
     func runCurrentFile(app: MainApp) async {
-        guard !isRunning else { return }
-
-        guard app.workSpaceStorage.remoteConnected else {
-            fail("SSH is disconnected. Reconnect to run this file.")
-            return
-        }
-        guard let terminal = app.terminalManager.remoteTerminal else {
-            fail("SSH is reconnecting. Try again once the connection is restored.")
-            return
-        }
-        guard let editor = app.activeTextEditor else {
-            fail("No file is open to run.")
-            return
-        }
-        guard let rootURL = URL(string: app.workSpaceStorage.currentDirectory.url) else {
-            fail("Couldn't determine the remote project's root directory.")
-            return
-        }
-        guard var command = command(forFileURL: editor.url, root: rootURL) else {
-            fail("This file type can't be executed.")
-            return
+        struct Setup {
+            let terminal: TerminalInstance
+            let editorURL: URL
+            let rootURL: URL
+            var command: String
+            var label: String
         }
 
-        var label = editor.url.lastPathComponent
+        // 1) All the fast, synchronous guard-checks, plus flipping the
+        // button to Stop immediately — done on the main actor before any
+        // await, so the icon changes the instant Run is tapped.
+        let setup: Setup? = await MainActor.run {
+            guard !self.isRunning else { return nil }
+            guard app.workSpaceStorage.remoteConnected else {
+                self.fail("SSH is disconnected. Reconnect to run this file.")
+                return nil
+            }
+            guard let terminal = app.terminalManager.remoteTerminal else {
+                self.fail("SSH is reconnecting. Try again once the connection is restored.")
+                return nil
+            }
+            guard let editor = app.activeTextEditor else {
+                self.fail("No file is open to run.")
+                return nil
+            }
+            guard let rootURL = URL(string: app.workSpaceStorage.currentDirectory.url) else {
+                self.fail("Couldn't determine the remote project's root directory.")
+                return nil
+            }
+            guard let command = self.command(forFileURL: editor.url, root: rootURL) else {
+                self.fail("This file type can't be executed.")
+                return nil
+            }
 
-        // A .dart file inside a Flutter project's lib/ folder isn't run with
-        // plain `dart file.dart` — the whole project is run instead.
-        if SupportedLanguage.detect(fileExtension: editor.url.pathExtension) == .dart {
-            let relative = relativePath(of: editor.url, root: rootURL)
+            self.pendingStopTimeout?.cancel()
+            self.pendingStopTimeout = nil
+            self.runStartedAt = Date()
+            self.currentToken = "pending"  // placeholder; replaced with the real token below
+            self.state = .running(startedAt: self.runStartedAt!, label: editor.url.lastPathComponent)
+
+            return Setup(
+                terminal: terminal, editorURL: editor.url, rootURL: rootURL, command: command,
+                label: editor.url.lastPathComponent)
+        }
+        guard var setup = setup else { return }
+
+        // 2) A .dart file inside a Flutter project's lib/ folder isn't run
+        // with plain `dart file.dart` — the whole project is run instead.
+        // `fileExists` only reads a value, doesn't touch state/UI, so it's
+        // safe to await here on whatever thread.
+        if SupportedLanguage.detect(fileExtension: setup.editorURL.pathExtension) == .dart {
+            let relative = relativePath(of: setup.editorURL, root: setup.rootURL)
             let isInsideLib = relative == "lib" || relative.hasPrefix("lib/")
-            if isInsideLib, await fileExists(app: app, root: rootURL, relativePath: "pubspec.yaml") {
-                command = "flutter run -d web-server"
-                label = "Flutter (web)"
+            if isInsideLib,
+                await fileExists(app: app, root: setup.rootURL, relativePath: "pubspec.yaml")
+            {
+                setup.command = "flutter run -d web-server"
+                setup.label = "Flutter (web)"
+                await MainActor.run {
+                    guard self.currentToken == "pending" else { return }  // stopped meanwhile
+                    self.state = .running(startedAt: self.runStartedAt ?? Date(), label: setup.label)
+                }
             }
         }
 
         await app.saveCurrentFile()
-        guard editor.isSaved else {
-            fail("Couldn't save the file before running.")
-            return
-        }
 
-        await run(command: command, label: label, root: rootURL, app: app, terminal: terminal)
+        let stillGoing: Bool = await MainActor.run {
+            guard self.currentToken == "pending" else { return false }  // stopped meanwhile
+            guard app.activeTextEditor?.isSaved == true else {
+                self.fail("Couldn't save the file before running.")
+                return false
+            }
+            return true
+        }
+        guard stillGoing else { return }
+
+        await run(
+            command: setup.command, label: setup.label, root: setup.rootURL, app: app,
+            terminal: setup.terminal)
     }
 
     /// Entry point for running a project-level target (npm/cargo/flutter),
-    /// selected from `availableProjectRunTargets(app:)`.
+    /// selected from `availableProjectRunTargets(app:)`. Must be called from
+    /// the main thread (e.g. a SwiftUI button action).
     func run(projectTarget: RemoteRunTarget, app: MainApp) {
         guard !isRunning else { return }
         guard app.workSpaceStorage.remoteConnected,
@@ -279,6 +326,13 @@ final class RemoteExecutionManager: ObservableObject {
             fail("Couldn't determine the remote project's root directory.")
             return
         }
+
+        pendingStopTimeout?.cancel()
+        pendingStopTimeout = nil
+        runStartedAt = Date()
+        currentToken = "pending"
+        state = .running(startedAt: runStartedAt!, label: projectTarget.title)
+
         Task {
             await run(
                 command: projectTarget.command, label: projectTarget.title, root: rootURL, app: app,
@@ -294,9 +348,6 @@ final class RemoteExecutionManager: ObservableObject {
     private func run(command: String, label: String, root: URL, app: MainApp, terminal: TerminalInstance)
         async
     {
-        pendingStopTimeout?.cancel()
-        pendingStopTimeout = nil
-
         let token = String(UUID().uuidString.prefix(8))
         let scriptURL = root.appendingPathComponent(Self.scriptFileName)
 
@@ -306,7 +357,7 @@ final class RemoteExecutionManager: ObservableObject {
             echo "\(Self.marker)\(token):$?"
             """
         guard let scriptData = script.data(using: .utf8) else {
-            fail("Couldn't prepare the run script.")
+            await MainActor.run { self.fail("Couldn't prepare the run script.") }
             return
         }
 
@@ -314,24 +365,28 @@ final class RemoteExecutionManager: ObservableObject {
             try await app.workSpaceStorage.write(
                 at: scriptURL, content: scriptData, atomically: true, overwrite: true)
         } catch {
-            fail("Couldn't write the run script to the remote project.")
+            await MainActor.run { self.fail("Couldn't write the run script to the remote project.") }
             return
         }
 
-        guard !isRunning else { return }  // a newer run/stop happened while writing
+        // Everything from here touches `state`/`outputBuffer`/the terminal's
+        // WebView — always on the main actor, no exceptions.
+        await MainActor.run {
+            guard self.currentToken == "pending" else { return }  // stopped meanwhile
+            self.currentToken = token
+            self.outputBuffer = ""
+            self.state = .running(startedAt: self.runStartedAt ?? Date(), label: label)
 
-        currentToken = token
-        outputBuffer = ""
-        runStartedAt = Date()
-        state = .running(startedAt: runStartedAt!, label: label)
-
-        // The only line the terminal ever shows for this run. Absolute path,
-        // since the shell's own cwd is not guaranteed to be the project root.
-        terminal.type(text: "bash \(shellQuoted(scriptURL.path))\r")
+            // The only line the terminal ever shows for this run. Absolute
+            // path, since the shell's own cwd is not guaranteed to be the
+            // project root.
+            terminal.type(text: "bash \(self.shellQuoted(scriptURL.path))\r")
+        }
     }
 
     /// Entry point for the toolbar's Stop button. Sends Ctrl+C through the
-    /// same SSH shell via the terminal's existing interrupt mechanism.
+    /// same SSH shell via the terminal's existing interrupt mechanism. Must
+    /// be called from the main thread (e.g. a SwiftUI button action).
     ///
     /// Ctrl+C only interrupts the foreground process — the script may not
     /// always get to echo its marker afterwards. Without a fallback, the
@@ -339,7 +394,8 @@ final class RemoteExecutionManager: ObservableObject {
     /// short grace period: if the marker hasn't shown up shortly after Stop
     /// was pressed, force the state back to idle so Run works again.
     func stop(app: MainApp) {
-        guard isRunning, let token = currentToken else { return }
+        guard isRunning else { return }
+        let token = currentToken
         app.terminalManager.remoteTerminal?.sendInterrupt()
 
         pendingStopTimeout?.cancel()
@@ -357,8 +413,12 @@ final class RemoteExecutionManager: ObservableObject {
     /// `WorkSpaceStorage.onTerminalData` to the terminal view for display.
     /// This only reads a copy to find this run's completion marker; it
     /// never writes to the terminal itself.
+    ///
+    /// - Important: MainApp already calls this from inside
+    ///   `Task { @MainActor in ... }`, so this always runs on the main
+    ///   thread already — no further hop needed here.
     func ingestRemoteOutput(_ data: Data) {
-        guard isRunning, let token = currentToken else { return }
+        guard isRunning, let token = currentToken, token != "pending" else { return }
         guard let chunk = String(data: data, encoding: .utf8) else { return }
 
         outputBuffer += chunk
@@ -380,8 +440,9 @@ final class RemoteExecutionManager: ObservableObject {
         resetRunTracking()
     }
 
-    /// Called by MainApp's existing `onRemoteDisconnect` hook so a run in
-    /// progress doesn't get stuck showing "Running…" after the link drops.
+    /// Called by MainApp's existing `onRemoteDisconnect` hook (already inside
+    /// `Task { @MainActor in ... }`) so a run in progress doesn't get stuck
+    /// showing "Running…" after the link drops.
     func handleDisconnect() {
         guard isRunning else { return }
         fail("SSH disconnected while running.")
