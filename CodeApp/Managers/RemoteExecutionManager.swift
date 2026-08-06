@@ -156,6 +156,25 @@ final class RemoteExecutionManager: ObservableObject {
             ?? false
     }
 
+    /// Walks up from a file's directory looking for a `lib` folder anywhere
+    /// in its ancestry (not just directly under the SSH workspace root —
+    /// a Flutter project is very often a subfolder of the connected root,
+    /// e.g. `<root>/pdf_reader/lib/main.dart`). Returns the Flutter
+    /// project's own root (the parent of `lib`), or nil if the file isn't
+    /// inside a `lib` folder at all.
+    private func flutterProjectRoot(forFileURL fileURL: URL) -> URL? {
+        var current = fileURL.deletingLastPathComponent()
+        while !current.path.isEmpty && current.path != "/" {
+            if current.lastPathComponent == "lib" {
+                return current.deletingLastPathComponent()
+            }
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path { return nil }
+            current = parent
+        }
+        return nil
+    }
+
     // MARK: Command construction for a single file
 
     private func command(forFileURL fileURL: URL, root: URL) -> String? {
@@ -273,26 +292,18 @@ final class RemoteExecutionManager: ObservableObject {
                 terminal: terminal, editorURL: editor.url, rootURL: rootURL, command: command,
                 label: editor.url.lastPathComponent)
         }
-        guard var setup = setup else { return }
+        guard let setup = setup else { return }
 
         // 2) A .dart file inside a Flutter project's lib/ folder isn't run
-        // with plain `dart file.dart` — the whole project is run instead.
-        // `fileExists` only reads a value, doesn't touch state/UI, so it's
-        // safe to await here on whatever thread.
-        if SupportedLanguage.detect(fileExtension: setup.editorURL.pathExtension) == .dart {
-            let relative = relativePath(of: setup.editorURL, root: setup.rootURL)
-            let isInsideLib = relative == "lib" || relative.hasPrefix("lib/")
-            if isInsideLib,
-                await fileExists(app: app, root: setup.rootURL, relativePath: "pubspec.yaml")
-            {
-                setup.command = "flutter run -d web-server"
-                setup.label = "Flutter (web)"
-                let flutterLabel = setup.label  // snapshot: can't capture a `var` in a @Sendable closure
-                await MainActor.run {
-                    guard self.currentToken == "pending" else { return }  // stopped meanwhile
-                    self.state = .running(startedAt: self.runStartedAt ?? Date(), label: flutterLabel)
-                }
-            }
+        // with plain `dart file.dart` — the whole Flutter project is run
+        // instead, and directly (no hidden script) so its live build output
+        // streams to the terminal exactly as it would if typed by hand.
+        if SupportedLanguage.detect(fileExtension: setup.editorURL.pathExtension) == .dart,
+            let projectRoot = flutterProjectRoot(forFileURL: setup.editorURL),
+            await fileExists(app: app, root: projectRoot, relativePath: "pubspec.yaml")
+        {
+            await runFlutterDirect(app: app, projectRoot: projectRoot, terminal: setup.terminal)
+            return
         }
 
         await app.saveCurrentFile()
@@ -341,11 +352,40 @@ final class RemoteExecutionManager: ObservableObject {
         }
     }
 
+    /// Runs `flutter run -d web-server` directly — no hidden script, no
+    /// completion marker. Flutter's own build/server output is what the
+    /// user wants to watch live, and routing it through a wrapper script
+    /// can change how Flutter buffers its output; typing the command
+    /// straight into the terminal avoids that entirely. Since `flutter run`
+    /// doesn't exit on its own, this stays "running" until Stop is pressed.
+    private func runFlutterDirect(app: MainApp, projectRoot: URL, terminal: TerminalInstance) async {
+        let shouldProceed: Bool = await MainActor.run {
+            guard self.currentToken == "pending" else { return false }  // stopped meanwhile
+            self.currentToken = "flutter-direct"
+            self.state = .running(startedAt: self.runStartedAt ?? Date(), label: "Flutter (web)")
+            return true
+        }
+        guard shouldProceed else { return }
+
+        await app.saveCurrentFile()
+
+        let quotedRoot = shellQuoted(projectRoot.path)
+        await MainActor.run {
+            guard self.currentToken == "flutter-direct" else { return }  // stopped while saving
+            // The only line the terminal ever shows for this run — cd into
+            // the actual Flutter project (which may be a subfolder of the
+            // SSH root), then run it, exactly as if typed by hand.
+            terminal.type(text: "cd \(quotedRoot) && krinry flutter run web\r")
+        }
+    }
+
     /// Writes the actual command into a small hidden script on the remote
     /// host (one write, not recurring) and types only a single short line
     /// to run it. The script's own final line echoes the completion marker
     /// to stdout, so it arrives through the terminal's existing, single
-    /// output stream — no second channel, no timers, no polling.
+    /// output stream — no second channel, no timers, no polling. (Not used
+    /// for Flutter — see `runFlutterDirect` above.)
+
     private func run(command: String, label: String, root: URL, app: MainApp, terminal: TerminalInstance)
         async
     {
