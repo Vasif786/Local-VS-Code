@@ -1,4 +1,4 @@
-name: Build Unsigned IPA
+name: Build signed IPA
 
 on:
   workflow_dispatch:
@@ -23,18 +23,13 @@ jobs:
         run: xcodebuild -version
 
       - name: Download Frameworks
-
         run: |
-
           chmod +x downloadFrameworks.sh
           ./downloadFrameworks.sh
 
       - name: Build Archive
-
         run: |
-
           PROJECT=$(find . -name "*.xcodeproj" | head -n 1)
-
           echo "PROJECT=$PROJECT"
 
           xcodebuild \
@@ -47,42 +42,62 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             archive
 
-      - name: Create IPA
-
+      - name: Ad-hoc Sign App
         run: |
+          APP_PATH=$(find build/CodeApp.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -n 1)
+          echo "APP_PATH=$APP_PATH"
+
+          cat > entitlements.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>get-task-allow</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # dyld refuses to load ANY unsigned binary at launch, not just the
+          # top-level executable — every embedded framework/dylib needs a
+          # valid (at least ad-hoc) signature too. Sign those first, then
+          # the app itself with --deep as a safety net.
+          find "$APP_PATH" \( -name "*.framework" -o -name "*.dylib" \) -print0 \
+            | xargs -0 -I{} codesign --force --sign - --timestamp=none "{}"
+
+          codesign --force --deep --sign - --timestamp=none \
+            --entitlements entitlements.plist "$APP_PATH"
+
+          echo "Verifying signature:"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+      - name: Create IPA
+        run: |
+          APP_PATH=$(find build/CodeApp.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -n 1)
 
           mkdir Payload
+          cp -R "$APP_PATH" Payload/
 
-          cp -R build/CodeApp.xcarchive/Products/Applications/*.app Payload/
-
-          cd Payload
-
-          zip -r ../CodeApp.ipa .
-
-          cd ..
+          # Zip from the directory ABOVE Payload/, including Payload/ itself,
+          # so the archive's root contains "Payload/<App>.app" — the
+          # structure a valid .ipa is required to have. (Zipping from
+          # *inside* Payload/, as before, put the .app at the zip root
+          # instead, which is an invalid .ipa layout.)
+          zip -r CodeApp.ipa Payload
 
           ls -lh CodeApp.ipa
 
       - name: Compress IPA To ZIP
-
         run: |
-
-          zip -r CodeApp-Unsigned.zip CodeApp.ipa
-
-          ls -lh CodeApp-Unsigned.zip
+          zip -r CodeApp-signed.zip CodeApp.ipa
+          ls -lh CodeApp-signed.zip
 
       - name: Upload ZIP Release
-
         uses: softprops/action-gh-release@v2
-
         with:
-
           tag_name: build-${{ github.run_number }}
-
-          name: Unsigned IPA
-
+          name: signed IPA
           files: |
-            CodeApp-Unsigned.zip
-
+            CodeApp-signed.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
