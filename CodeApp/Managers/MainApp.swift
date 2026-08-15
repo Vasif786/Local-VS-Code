@@ -389,6 +389,21 @@ class MainApp: ObservableObject {
         guard let currentDirectoryURL = workSpaceStorage.currentDirectory._url else {
             return
         }
+
+        // Dart/Flutter in a remote SSH project: handled by the separate
+        // hybrid completion+analyzer system (no LSP, no persistent second
+        // connection) — see DartHybridIntelliSense.swift. Does not touch
+        // the local-file-only Python/Java path below at all. Applies to
+        // any .dart file in the remote project, not just files under lib/.
+        if !runeStoneEditorEnabled, languageServiceEnabled,
+            activeTextEditor.url.pathExtension == "dart",
+            !currentDirectoryURL.isFileURL
+        {
+            await DartHybridIntelliSense.shared.activate(
+                app: self, editorURL: activeTextEditor.url, content: activeTextEditor.content)
+            return
+        }
+
         guard !runeStoneEditorEnabled && currentDirectoryURL.isFileURL && languageServiceEnabled
         else {
             monacoInstance.disconnectLanguageService()
@@ -1299,6 +1314,15 @@ extension MainApp: EditorImplementationDelegate {
         // TODO: This can be made more robust
         activeTextEditor?.currentVersionId = versionID
         activeTextEditor?.content = content
+
+        if let editorURL = activeTextEditor?.url, editorURL.absoluteString == url,
+            editorURL.pathExtension == "dart"
+        {
+            Task { @MainActor in
+                DartHybridIntelliSense.shared.scheduleAnalysis(
+                    app: self, editorURL: editorURL, content: content)
+            }
+        }
     }
 
     func editorImplementation(cursorPositionDidChange line: Int, column: Int) {

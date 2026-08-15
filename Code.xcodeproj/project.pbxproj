@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		354DA3C8156EB3342C6CE8D5 /* DartHybridIntelliSense.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A2A85E8BD084D5BB0303F35 /* DartHybridIntelliSense.swift */; };
 		569080974B7EFA0742190FC4 /* RemoteExecutionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */; };
 		778E5104343E2BB04B166DF9 /* RemoteRunExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */; };
 		940C68252C646E0400089EA3 /* System.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940C68242C646E0400089EA3 /* System.swift */; };
@@ -1409,6 +1410,7 @@
 
 /* Begin PBXFileReference section */
 		048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RemoteExecutionManager.swift; path = RemoteExecutionManager.swift; sourceTree = "<group>"; };
+		0A2A85E8BD084D5BB0303F35 /* DartHybridIntelliSense.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DartHybridIntelliSense.swift; path = CodeApp/Managers/DartHybridIntelliSense.swift; sourceTree = "<group>"; };
 		4F30816829662CBF002708FD /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
 		4F30816929662D58002708FD /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		73F80B0F2850F7E5000EF3FC /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -3169,6 +3171,7 @@
 				949CDF492C6658DC00FFC5B1 /* LanguageService.swift */,
 				F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */,
 				048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */,
+				0A2A85E8BD084D5BB0303F35 /* DartHybridIntelliSense.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -3974,6 +3977,7 @@
 				9F046C322922203E00BDE4E9 /* ToolbarManager.swift in Sources */,
 				778E5104343E2BB04B166DF9 /* RemoteRunExtension.swift in Sources */,
 				569080974B7EFA0742190FC4 /* RemoteExecutionManager.swift in Sources */,
+				354DA3C8156EB3342C6CE8D5 /* DartHybridIntelliSense.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

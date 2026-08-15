@@ -29,6 +29,13 @@ class WorkSpaceStorage: ObservableObject {
     private var fss: [String: FileSystemProvider] = [:]
     private var isConnecting = false
 
+    /// Host + auth for the current SSH connection, retained (in memory
+    /// only, never persisted) so a feature that needs its OWN independent,
+    /// one-shot SSH session — e.g. running `dart analyze` in the
+    /// background — can reconnect with the same credentials without
+    /// prompting the user again.
+    private(set) var currentRemoteConnectionInfo: (host: URL, authenticationMode: RemoteAuthenticationMode)?
+
     enum FSError: String, LocalizedError {
         case NotImplemented = "errors.fs.not_implemented"
         case SchemeNotRegistered = "errors.fs.scheme_not_registered"
@@ -195,6 +202,7 @@ class WorkSpaceStorage: ObservableObject {
 
                 self.fss[host.scheme!] = fs
                 self.updateDirectory(name: "SFTP", url: host.absoluteString)
+                self.currentRemoteConnectionInfo = (host: host, authenticationMode: authenticationMode)
 
                 if let fingerPrint = fs.fingerPrint {
                     DispatchQueue.main.async {
@@ -228,6 +236,7 @@ class WorkSpaceStorage: ObservableObject {
         directoryStorage.removeAll()
 
         fss[currentScheme!] = nil
+        currentRemoteConnectionInfo = nil
 
         onRemoteDisconnectAction?()
     }

@@ -458,6 +458,15 @@ extension MonacoImplementation: EditorImplementation {
         return (result as? Bool) ?? false
     }
 
+    /// Runs arbitrary JS in the Monaco WebView. Used only by the Dart
+    /// hybrid IntelliSense feature (see DartHybridIntelliSense.swift) to
+    /// install its completion provider and push diagnostics — kept
+    /// separate from the LSP-specific methods below so it can't affect
+    /// Python/Java or any other language's behavior.
+    func executeCustomScript(_ script: String) async throws -> Any? {
+        try await monacoWebView.evaluateJavaScriptAsync(script)
+    }
+
     func connectLanguageService(
         serverURL: URL, serverArgs: [String], pwd: URL, languageIdentifier: String
     ) {

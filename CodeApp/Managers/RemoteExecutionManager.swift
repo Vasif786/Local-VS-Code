@@ -162,7 +162,7 @@ final class RemoteExecutionManager: ObservableObject {
     /// e.g. `<root>/pdf_reader/lib/main.dart`). Returns the Flutter
     /// project's own root (the parent of `lib`), or nil if the file isn't
     /// inside a `lib` folder at all.
-    private func flutterProjectRoot(forFileURL fileURL: URL) -> URL? {
+    static func flutterProjectRoot(forFileURL fileURL: URL) -> URL? {
         var current = fileURL.deletingLastPathComponent()
         while !current.path.isEmpty && current.path != "/" {
             if current.lastPathComponent == "lib" {
@@ -299,7 +299,7 @@ final class RemoteExecutionManager: ObservableObject {
         // instead, and directly (no hidden script) so its live build output
         // streams to the terminal exactly as it would if typed by hand.
         if SupportedLanguage.detect(fileExtension: setup.editorURL.pathExtension) == .dart,
-            let projectRoot = flutterProjectRoot(forFileURL: setup.editorURL),
+            let projectRoot = Self.flutterProjectRoot(forFileURL: setup.editorURL),
             await fileExists(app: app, root: projectRoot, relativePath: "pubspec.yaml")
         {
             await runFlutterDirect(app: app, projectRoot: projectRoot, terminal: setup.terminal)
