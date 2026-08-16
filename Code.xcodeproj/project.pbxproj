@@ -9,7 +9,9 @@
 /* Begin PBXBuildFile section */
 		354DA3C8156EB3342C6CE8D5 /* DartHybridIntelliSense.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A2A85E8BD084D5BB0303F35 /* DartHybridIntelliSense.swift */; };
 		569080974B7EFA0742190FC4 /* RemoteExecutionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */; };
+		769E18CEAA4AB5AFEAB7725D /* SimulatorManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFE4A1FE6755F9869CCB7011 /* SimulatorManager.swift */; };
 		778E5104343E2BB04B166DF9 /* RemoteRunExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */; };
+		890422CE574C82369F6BF61A /* SimulatorExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D30C47058822E81B9DFB75E /* SimulatorExtension.swift */; };
 		940C68252C646E0400089EA3 /* System.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940C68242C646E0400089EA3 /* System.swift */; };
 		940C68262C64704C00089EA3 /* String+toCString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 949B3CC425DEA89A00BC83B5 /* String+toCString.swift */; };
 		940C68272C65D36700089EA3 /* commandDictionary.plist in Resources */ = {isa = PBXBuildFile; fileRef = 948D11FF2583F20C008F877A /* commandDictionary.plist */; };
@@ -916,6 +918,7 @@
 		9FE3E2AA298A169300F63DD0 /* Dynamic in Frameworks */ = {isa = PBXBuildFile; productRef = 9FE3E2A9298A169300F63DD0 /* Dynamic */; };
 		9FE3E2AC298A169B00F63DD0 /* SwiftGit2 in Frameworks */ = {isa = PBXBuildFile; productRef = 9FE3E2AB298A169A00F63DD0 /* SwiftGit2 */; };
 		9FE3E2AD298A16A300F63DD0 /* NMSSH.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 942E321128093CA600233441 /* NMSSH.xcframework */; };
+		A2B57D2E74A8348AE903D96E /* SimulatorWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69404B7EF47F4AA2B54BEB37 /* SimulatorWindowView.swift */; };
 		FFD081B82925F8FB001D9373 /* TextEditorWithPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD081B72925F8FB001D9373 /* TextEditorWithPlaceholder.swift */; };
 		FFD081B92925F8FB001D9373 /* TextEditorWithPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD081B72925F8FB001D9373 /* TextEditorWithPlaceholder.swift */; };
 		FFD081BB29260B00001D9373 /* Libgit2Error.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD081BA29260B00001D9373 /* Libgit2Error.swift */; };
@@ -1411,8 +1414,10 @@
 /* Begin PBXFileReference section */
 		048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RemoteExecutionManager.swift; path = RemoteExecutionManager.swift; sourceTree = "<group>"; };
 		0A2A85E8BD084D5BB0303F35 /* DartHybridIntelliSense.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DartHybridIntelliSense.swift; path = DartHybridIntelliSense.swift; sourceTree = "<group>"; };
+		2D30C47058822E81B9DFB75E /* SimulatorExtension.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SimulatorExtension.swift; sourceTree = "<group>"; };
 		4F30816829662CBF002708FD /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
 		4F30816929662D58002708FD /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		69404B7EF47F4AA2B54BEB37 /* SimulatorWindowView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SimulatorWindowView.swift; sourceTree = "<group>"; };
 		73F80B0F2850F7E5000EF3FC /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/Localizable.strings; sourceTree = "<group>"; };
 		73F80B102850F7EE000EF3FC /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		940C68242C646E0400089EA3 /* System.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System.swift; sourceTree = "<group>"; };
@@ -2034,6 +2039,7 @@
 		9FDAD1B8296EAC3C00E8AEB2 /* SourceControlTemplateSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceControlTemplateSection.swift; sourceTree = "<group>"; };
 		9FE3E292298A14BC00F63DD0 /* CodeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9FE3E294298A14BC00F63DD0 /* CodeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeUITests.swift; sourceTree = "<group>"; };
+		AFE4A1FE6755F9869CCB7011 /* SimulatorManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SimulatorManager.swift; sourceTree = "<group>"; };
 		F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RemoteRunExtension.swift; path = RemoteRunExtension.swift; sourceTree = "<group>"; };
 		FFD081B72925F8FB001D9373 /* TextEditorWithPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextEditorWithPlaceholder.swift; sourceTree = "<group>"; };
 		FFD081BA29260B00001D9373 /* Libgit2Error.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Libgit2Error.swift; sourceTree = "<group>"; };
@@ -3172,6 +3178,9 @@
 				F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */,
 				048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */,
 				0A2A85E8BD084D5BB0303F35 /* DartHybridIntelliSense.swift */,
+				AFE4A1FE6755F9869CCB7011 /* SimulatorManager.swift */,
+				69404B7EF47F4AA2B54BEB37 /* SimulatorWindowView.swift */,
+				2D30C47058822E81B9DFB75E /* SimulatorExtension.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -3978,6 +3987,9 @@
 				778E5104343E2BB04B166DF9 /* RemoteRunExtension.swift in Sources */,
 				569080974B7EFA0742190FC4 /* RemoteExecutionManager.swift in Sources */,
 				354DA3C8156EB3342C6CE8D5 /* DartHybridIntelliSense.swift in Sources */,
+				769E18CEAA4AB5AFEAB7725D /* SimulatorManager.swift in Sources */,
+				A2B57D2E74A8348AE903D96E /* SimulatorWindowView.swift in Sources */,
+				890422CE574C82369F6BF61A /* SimulatorExtension.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

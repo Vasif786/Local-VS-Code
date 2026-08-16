@@ -218,6 +218,8 @@ private struct MainView: View {
                     }
                 }.padding(.bottom, 30).frame(width: geometry.size.width)
 
+                SimulatorWindowsOverlay()
+
             }
         }
         .background(Color.init(id: "sideBar.background").edgesIgnoringSafeArea(.all))

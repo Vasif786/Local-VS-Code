@@ -90,13 +90,23 @@ private let dartCompletionProviderScript = #"""
             {l:"startsWith", k:"Method", d:"bool startsWith(Pattern other)"},
             {l:"endsWith", k:"Method", d:"bool endsWith(String other)"},
             {l:"indexOf", k:"Method", d:"int indexOf(Pattern pattern)"},
-            {l:"codeUnitAt", k:"Method", d:"int codeUnitAt(int index)"}
+            {l:"codeUnitAt", k:"Method", d:"int codeUnitAt(int index)"},
+            {l:"padLeft", k:"Method", d:"String padLeft(int width, [String padding])"},
+            {l:"padRight", k:"Method", d:"String padRight(int width, [String padding])"},
+            {l:"replaceFirst", k:"Method", d:"String replaceFirst(Pattern from, String to)"},
+            {l:"compareTo", k:"Method", d:"int compareTo(String other)"},
+            {l:"toList", k:"Method", d:"List<String> toList()"},
+            {l:"runes", k:"Property", d:"Runes runes"}
         ],
         "List": [
             {l:"add", k:"Method", d:"void add(E value)"},
             {l:"addAll", k:"Method", d:"void addAll(Iterable<E> iterable)"},
             {l:"remove", k:"Method", d:"bool remove(Object? value)"},
             {l:"removeAt", k:"Method", d:"E removeAt(int index)"},
+            {l:"removeLast", k:"Method", d:"E removeLast()"},
+            {l:"removeWhere", k:"Method", d:"void removeWhere(bool Function(E) test)"},
+            {l:"insert", k:"Method", d:"void insert(int index, E element)"},
+            {l:"clear", k:"Method", d:"void clear()"},
             {l:"length", k:"Property", d:"int length"},
             {l:"isEmpty", k:"Property", d:"bool isEmpty"},
             {l:"isNotEmpty", k:"Property", d:"bool isNotEmpty"},
@@ -107,7 +117,18 @@ private let dartCompletionProviderScript = #"""
             {l:"contains", k:"Method", d:"bool contains(Object? element)"},
             {l:"first", k:"Property", d:"E first"},
             {l:"last", k:"Property", d:"E last"},
-            {l:"join", k:"Method", d:"String join([String separator])"}
+            {l:"join", k:"Method", d:"String join([String separator])"},
+            {l:"reduce", k:"Method", d:"E reduce(E Function(E, E) combine)"},
+            {l:"fold", k:"Method", d:"T fold<T>(T initialValue, T Function(T, E) combine)"},
+            {l:"take", k:"Method", d:"Iterable<E> take(int count)"},
+            {l:"skip", k:"Method", d:"Iterable<E> skip(int count)"},
+            {l:"toList", k:"Method", d:"List<E> toList()"},
+            {l:"toSet", k:"Method", d:"Set<E> toSet()"},
+            {l:"asMap", k:"Method", d:"Map<int, E> asMap()"},
+            {l:"indexWhere", k:"Method", d:"int indexWhere(bool Function(E) test)"},
+            {l:"any", k:"Method", d:"bool any(bool Function(E) test)"},
+            {l:"every", k:"Method", d:"bool every(bool Function(E) test)"},
+            {l:"reversed", k:"Property", d:"Iterable<E> reversed"}
         ],
         "Map": [
             {l:"keys", k:"Property", d:"Iterable<K> keys"},
@@ -118,21 +139,31 @@ private let dartCompletionProviderScript = #"""
             {l:"forEach", k:"Method", d:"void forEach(void Function(K, V) f)"},
             {l:"isEmpty", k:"Property", d:"bool isEmpty"},
             {l:"isNotEmpty", k:"Property", d:"bool isNotEmpty"},
-            {l:"length", k:"Property", d:"int length"}
+            {l:"length", k:"Property", d:"int length"},
+            {l:"putIfAbsent", k:"Method", d:"V putIfAbsent(K key, V Function() ifAbsent)"},
+            {l:"update", k:"Method", d:"V update(K key, V Function(V) update)"},
+            {l:"clear", k:"Method", d:"void clear()"},
+            {l:"entries", k:"Property", d:"Iterable<MapEntry<K, V>> entries"}
         ],
         "int": [
             {l:"toString", k:"Method", d:"String toString()"},
             {l:"toDouble", k:"Method", d:"double toDouble()"},
             {l:"isEven", k:"Property", d:"bool isEven"},
             {l:"isOdd", k:"Property", d:"bool isOdd"},
-            {l:"abs", k:"Method", d:"int abs()"}
+            {l:"isNegative", k:"Property", d:"bool isNegative"},
+            {l:"abs", k:"Method", d:"int abs()"},
+            {l:"clamp", k:"Method", d:"num clamp(num lower, num upper)"},
+            {l:"toRadixString", k:"Method", d:"String toRadixString(int radix)"}
         ],
         "double": [
             {l:"toString", k:"Method", d:"String toString()"},
             {l:"toInt", k:"Method", d:"int toInt()"},
             {l:"round", k:"Method", d:"int round()"},
             {l:"floor", k:"Method", d:"int floor()"},
-            {l:"ceil", k:"Method", d:"int ceil()"}
+            {l:"ceil", k:"Method", d:"int ceil()"},
+            {l:"abs", k:"Method", d:"double abs()"},
+            {l:"toStringAsFixed", k:"Method", d:"String toStringAsFixed(int fractionDigits)"},
+            {l:"isNaN", k:"Property", d:"bool isNaN"}
         ]
     };
 
@@ -149,18 +180,30 @@ private let dartCompletionProviderScript = #"""
         {l:"Image", k:"Constructor", d:"Image.network(String src)"},
         {l:"ListView", k:"Constructor", d:"ListView({List<Widget> children})", doc:"A scrollable list of widgets."},
         {l:"ListView.builder", k:"Constructor", d:"ListView.builder({required int itemCount, required IndexedWidgetBuilder itemBuilder})"},
+        {l:"GridView.builder", k:"Constructor", d:"GridView.builder({required SliverGridDelegate gridDelegate, required IndexedWidgetBuilder itemBuilder})"},
         {l:"Padding", k:"Constructor", d:"Padding({required EdgeInsetsGeometry padding, Widget? child})"},
         {l:"SizedBox", k:"Constructor", d:"SizedBox({double? width, double? height, Widget? child})"},
         {l:"ElevatedButton", k:"Constructor", d:"ElevatedButton({required VoidCallback? onPressed, required Widget child})"},
         {l:"TextButton", k:"Constructor", d:"TextButton({required VoidCallback? onPressed, required Widget child})"},
         {l:"TextField", k:"Constructor", d:"TextField({TextEditingController? controller})"},
+        {l:"TextFormField", k:"Constructor", d:"TextFormField({TextEditingController? controller, FormFieldValidator<String>? validator})"},
+        {l:"Form", k:"Constructor", d:"Form({required Widget child, GlobalKey<FormState>? key})"},
         {l:"MaterialApp", k:"Constructor", d:"MaterialApp({Widget? home, String? title})"},
         {l:"StatelessWidget", k:"Class", d:"abstract class StatelessWidget extends Widget"},
         {l:"StatefulWidget", k:"Class", d:"abstract class StatefulWidget extends Widget"},
         {l:"Expanded", k:"Constructor", d:"Expanded({required Widget child, int flex = 1})"},
         {l:"Flexible", k:"Constructor", d:"Flexible({required Widget child})"},
         {l:"SafeArea", k:"Constructor", d:"SafeArea({required Widget child})"},
-        {l:"GestureDetector", k:"Constructor", d:"GestureDetector({VoidCallback? onTap, required Widget child})"}
+        {l:"GestureDetector", k:"Constructor", d:"GestureDetector({VoidCallback? onTap, required Widget child})"},
+        {l:"InkWell", k:"Constructor", d:"InkWell({VoidCallback? onTap, required Widget child})"},
+        {l:"Card", k:"Constructor", d:"Card({Widget? child, double? elevation})"},
+        {l:"Divider", k:"Constructor", d:"Divider({double? height, double? thickness})"},
+        {l:"Wrap", k:"Constructor", d:"Wrap({List<Widget> children})"},
+        {l:"CircularProgressIndicator", k:"Constructor", d:"CircularProgressIndicator({double? value})"},
+        {l:"AlertDialog", k:"Constructor", d:"AlertDialog({Widget? title, Widget? content, List<Widget>? actions})"},
+        {l:"ClipRRect", k:"Constructor", d:"ClipRRect({BorderRadius? borderRadius, required Widget child})"},
+        {l:"Navigator", k:"Class", d:"class Navigator", doc:"Manages a stack of Route objects."},
+        {l:"FloatingActionButton", k:"Constructor", d:"FloatingActionButton({required VoidCallback? onPressed, Widget? child})"}
     ];
 
     function kindOf(k) {
@@ -211,6 +254,9 @@ private let dartCompletionProviderScript = #"""
     monaco.languages.registerCompletionItemProvider('dart', {
         triggerCharacters: ['.', ':', ' '],
         provideCompletionItems: function (model, position) {
+            if (model.getLanguageId() !== 'dart' && !/\.dart$/.test(model.uri.path || '')) {
+                return { suggestions: [] };
+            }
             var line = model.getLineContent(position.lineNumber);
             var textBeforeCursor = line.substring(0, position.column - 1);
             var wordInfo = model.getWordUntilPosition(position);
@@ -279,7 +325,14 @@ private struct DartDiagnostic {
 /// PTY, unsuitable for machine-readable output anyway.
 private final class OneShotSSHCommandRunner: NSObject, NMSSHChannelDelegate {
     private var session: NMSSHSession?
-    private let queue = DispatchQueue(label: "dart-analyze.oneshot.queue")
+    /// Shared (not per-instance) on purpose: even though the coordinator
+    /// above already limits analysis to one at a time, this guarantees
+    /// every NMSSH operation from this feature is globally serialized —
+    /// belt-and-suspenders against NMSSH's documented lack of thread
+    /// safety for concurrent use, which is the most likely source of the
+    /// intermittent crashes.
+    private static let queue = DispatchQueue(label: "dart-analyze.oneshot.queue")
+    private var queue: DispatchQueue { Self.queue }
     private var outputBuffer = ""
     private var continuation: CheckedContinuation<String, Error>?
     private var marker: String = ""
@@ -378,12 +431,18 @@ final class DartHybridIntelliSense {
 
     private var debounceTask: DispatchWorkItem?
     private var isAnalyzing = false
-    private var pending: (editorURL: URL, content: String)?
+    private var pending: (editorURL: URL, content: String, generation: Int)?
+    /// Bumped on every new content change. A result is only shown if it's
+    /// still the most recent generation by the time it comes back — an
+    /// older, now-superseded analysis (still in flight when the user kept
+    /// typing) is discarded rather than briefly overwriting fresh state
+    /// with stale markers.
+    private var generation = 0
 
-    /// Call when a remote `.dart` file (inside a Flutter project's `lib/`)
-    /// becomes the active editor. Installs the completion provider (no-op
-    /// if already installed) and requests markers for the current content
-    /// immediately, so diagnostics don't wait for the first edit.
+    /// Call when a remote `.dart` file becomes the active editor. Installs
+    /// the completion provider (no-op if already installed) and requests
+    /// markers for the current content immediately, so diagnostics don't
+    /// wait for the first edit.
     func activate(app: MainApp, editorURL: URL, content: String) {
         Task {
             _ = try? await (app.monacoInstance as? MonacoImplementation)?
@@ -396,27 +455,34 @@ final class DartHybridIntelliSense {
     /// `MainApp.editorImplementation(contentDidChangeForModelURL:...)`) —
     /// debounces internally, so callers don't need to.
     func scheduleAnalysis(app: MainApp, editorURL: URL, content: String) {
+        generation += 1
+        let thisGeneration = generation
+
         debounceTask?.cancel()
         let task = DispatchWorkItem { [weak app] in
             guard let app = app else { return }
-            Task { await DartHybridIntelliSense.shared.runOrQueue(app: app, editorURL: editorURL, content: content) }
+            Task {
+                await DartHybridIntelliSense.shared.runOrQueue(
+                    app: app, editorURL: editorURL, content: content, generation: thisGeneration)
+            }
         }
         debounceTask = task
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: task)
     }
 
-    private func runOrQueue(app: MainApp, editorURL: URL, content: String) async {
+    private func runOrQueue(app: MainApp, editorURL: URL, content: String, generation: Int) async {
         guard !isAnalyzing else {
-            pending = (editorURL, content)  // coalesce: only the latest edit matters
+            pending = (editorURL, content, generation)  // coalesce: only the latest edit matters
             return
         }
         isAnalyzing = true
-        await runAnalysis(app: app, editorURL: editorURL, content: content)
+        await runAnalysis(app: app, editorURL: editorURL, content: content, generation: generation)
         isAnalyzing = false
 
         if let next = pending {
             pending = nil
-            await runOrQueue(app: app, editorURL: next.editorURL, content: next.content)
+            await runOrQueue(
+                app: app, editorURL: next.editorURL, content: next.content, generation: next.generation)
         }
     }
 
@@ -457,7 +523,7 @@ final class DartHybridIntelliSense {
             ?? false
     }
 
-    private func runAnalysis(app: MainApp, editorURL: URL, content: String) async {
+    private func runAnalysis(app: MainApp, editorURL: URL, content: String, generation: Int) async {
         guard app.workSpaceStorage.remoteConnected,
             let connectionInfo = app.workSpaceStorage.currentRemoteConnectionInfo
         else {
@@ -489,18 +555,29 @@ final class DartHybridIntelliSense {
             return  // background diagnostics — fail silently, don't interrupt typing
         }
 
-        let diagnostics = Self.parseMachineOutput(output)
+        guard generation == self.generation else { return }  // superseded while we were waiting
+
+        let diagnostics = Self.parseMachineOutput(output, matchingFileSuffix: relativeTempPath)
         await pushMarkers(app: app, editorURL: editorURL, diagnostics: diagnostics)
     }
 
     /// Parses `dart analyze --format=machine` output:
     /// SEVERITY|TYPE|ERROR_CODE|FILE|LINE|COLUMN|LENGTH|MESSAGE
-    private static func parseMachineOutput(_ output: String) -> [DartDiagnostic] {
+    ///
+    /// `matchingFileSuffix` (our temp file's path, relative to the analysis
+    /// root) is required: when a `pubspec.yaml` is present, `dart analyze`
+    /// often reports diagnostics for the WHOLE package context, not just
+    /// the single file we asked about. Without filtering by FILE here,
+    /// another file's errors could get attributed to the current file (or
+    /// mixed in with it) — this was the cause of markers showing up on
+    /// correct code, or not showing up on genuinely broken code.
+    private static func parseMachineOutput(_ output: String, matchingFileSuffix: String) -> [DartDiagnostic] {
         var results: [DartDiagnostic] = []
         for line in output.split(separator: "\n") {
             let parts = line.split(separator: "|", maxSplits: 7, omittingEmptySubsequences: false)
             guard parts.count == 8,
                 let severity = DartAnalyzeSeverity(rawValue: String(parts[0])),
+                parts[3].hasSuffix(matchingFileSuffix),
                 let lineNumber = Int(parts[4]),
                 let column = Int(parts[5]),
                 let length = Int(parts[6])
@@ -519,11 +596,7 @@ final class DartHybridIntelliSense {
         guard let monaco = app.monacoInstance as? MonacoImplementation else { return }
 
         let markersJSON = diagnostics.map { d -> String in
-            let escapedMessage =
-                d.message
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-                .replacingOccurrences(of: "\n", with: " ")
+            let escapedMessage = Self.jsEscape(d.message)
             return """
                 {"severity":\(d.severity.monacoValue),"message":"\(escapedMessage)",\
                 "startLineNumber":\(d.line),"startColumn":\(d.column),\
@@ -531,13 +604,37 @@ final class DartHybridIntelliSense {
                 """
         }.joined(separator: ",")
 
+        let escapedURI = Self.jsEscape(editorURL.absoluteString)
         let script = """
             (function() {
-                var model = monaco.editor.getModel(monaco.Uri.parse("\(editorURL.absoluteString)"));
+                var uriString = "\(escapedURI)";
+                var model = monaco.editor.getModel(monaco.Uri.parse(uriString));
+                if (!model) {
+                    // Fallback: exact string form of the URI Monaco expects can
+                    // differ slightly (encoding, trailing slash, etc.) — match
+                    // against every open model's own URI string instead of
+                    // failing silently, which was causing diagnostics to
+                    // sometimes never appear at all.
+                    var all = monaco.editor.getModels();
+                    for (var i = 0; i < all.length; i++) {
+                        if (all[i].uri.toString() === uriString || all[i].uri.path === uriString) {
+                            model = all[i];
+                            break;
+                        }
+                    }
+                }
                 if (!model) { return; }
                 monaco.editor.setModelMarkers(model, "dart-analyzer", [\(markersJSON)]);
             })();
             """
         _ = try? await monaco.executeCustomScript(script)
+    }
+
+    private static func jsEscape(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
     }
 }
