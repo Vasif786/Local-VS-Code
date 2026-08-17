@@ -94,18 +94,28 @@ struct SimulatorDeviceFrameView: View {
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape.fill")
             }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
             Button { window.reloadToken = UUID() } label: {
                 Image(systemName: "arrow.clockwise")
             }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
             Button { window.orientation = window.orientation == .portrait ? .landscape : .portrait } label: {
                 Image(systemName: "rotate.right")
             }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
             Button { window.isMinimized = true } label: {
                 Image(systemName: "minus.circle.fill")
             }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
             }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
         }
         .font(.system(size: 13))
         .foregroundColor(.white)
@@ -113,10 +123,13 @@ struct SimulatorDeviceFrameView: View {
         .frame(width: displaySize.width, height: 28)
         .background(Color.black.opacity(0.88))
         .clipShape(Capsule())
-        // Only the control bar drags the window — dragging inside the web
-        // view itself should scroll the page, not move the window.
-        .gesture(
-            DragGesture()
+        // simultaneousGesture (not .gesture) + a minimum distance: lets the
+        // buttons' own tap gestures win for an ordinary tap, and only
+        // starts a drag once the finger has genuinely moved. Using plain
+        // .gesture() here was capturing every touch before it reached the
+        // buttons, which is why none of them were responding.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 12)
                 .onChanged { dragTranslation = $0.translation }
                 .onEnded { value in
                     window.position.x += value.translation.width
@@ -168,8 +181,9 @@ struct SimulatorDeviceFrameView: View {
                 .padding(7)
                 .background(Color.black.opacity(0.6))
                 .clipShape(Circle())
+                .contentShape(Circle())
                 .gesture(
-                    DragGesture()
+                    DragGesture(minimumDistance: 2)
                         .onChanged { value in
                             let delta = (value.translation.width + value.translation.height) / 2
                             window.displayScale = min(max(resizeStartScale + delta / 500, 0.28), 1.1)
@@ -263,6 +277,9 @@ struct SimulatorWindowsOverlay: View {
                 }
             }
         }
+        // With no windows open, this overlay must not swallow taps meant
+        // for the rest of the app underneath it.
+        .allowsHitTesting(!manager.windows.isEmpty)
         .confirmationDialog(
             "Open Simulator", isPresented: $manager.showDevicePicker, titleVisibility: .visible
         ) {
