@@ -232,7 +232,7 @@ private struct SimulatorSettingsView: View {
             .navigationTitle("Simulator Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                SwiftUI.ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Close") { dismiss() }
                 }
             }
