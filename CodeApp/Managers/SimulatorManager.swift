@@ -76,6 +76,11 @@ final class SimulatorWindowState: ObservableObject, Identifiable {
     @Published var url: URL
     @Published var orientation: SimulatorOrientation = .portrait
     @Published var position: CGPoint
+    /// Plain (non-@Published) scratch value the drag gesture uses as its
+    /// baseline — deliberately not @Published, since it's write-only
+    /// bookkeeping for the gesture and shouldn't trigger a view refresh by
+    /// itself.
+    var dragStartPosition: CGPoint = .zero
     @Published var displayScale: CGFloat
     @Published var isMinimized: Bool = false
     /// Bumped to request a reload; the web view's Coordinator watches this

@@ -5,13 +5,24 @@
 //  Rendering for one floating simulator window. See SimulatorManager.swift
 //  for the underlying state model.
 //
+//  Safety-first design (rewritten after the drag/resize/rotate gestures
+//  caused the whole screen to become unresponsive): every interactive
+//  control here is a plain SwiftUI Button (tap only). There is exactly
+//  ONE DragGesture in this entire file — on a dedicated grip handle that
+//  has no other control anywhere near or inside it — so it can never
+//  compete with a button's own tap recognition. Resize is +/- buttons,
+//  not a drag handle. Rotation is a plain frame-dimension swap, not a
+//  `.rotationEffect` transform (combining rotation transforms with
+//  reactive `.frame()` sizing is a known source of SwiftUI layout
+//  thrashing, and was the most likely cause of the freeze).
+//
 
 import SwiftUI
 import WebKit
 
 /// Thin WKWebView wrapper. Reloads ONLY when `reloadToken` changes or the
-/// URL itself changes — never on ordinary SwiftUI re-renders (dragging,
-/// resizing, rotating), so the loaded page's state isn't lost by those.
+/// URL itself changes — never on ordinary SwiftUI re-renders, so the
+/// loaded page's state isn't lost by those.
 private struct SimulatorWebView: UIViewRepresentable {
     @ObservedObject var window: SimulatorWindowState
 
@@ -42,156 +53,150 @@ private struct SimulatorWebView: UIViewRepresentable {
     }
 }
 
-/// The floating device frame: mini control bar + bezel + web view.
-/// Deliberately never removed from the view hierarchy while its window
-/// still exists (see `SimulatorWindowsOverlay`) — minimizing only shrinks
-/// and hides it, so `SimulatorWebView` (and the WKWebView inside it) is
-/// never destroyed/recreated, which is what keeps the loaded page intact.
+/// The floating device frame: grip handle + title, button row, bezel,
+/// resize buttons.
 struct SimulatorDeviceFrameView: View {
     @ObservedObject var window: SimulatorWindowState
     let onClose: () -> Void
 
-    @State private var dragTranslation: CGSize = .zero
-    @State private var resizeStartScale: CGFloat = 0.45
     @State private var showSettings = false
     @EnvironmentObject var simulatorManager: SimulatorManager
 
-    private var logicalSize: CGSize {
-        let base = window.deviceType.portraitSize
-        return window.orientation == .portrait
-            ? base : CGSize(width: base.height, height: base.width)
-    }
+    private static let resizeStep: CGFloat = 0.08
+    private static let minScale: CGFloat = 0.28
+    private static let maxScale: CGFloat = 1.1
 
-    private var displaySize: CGSize {
+    /// Portrait frame size (the only orientation the frame image has).
+    private var portraitDisplaySize: CGSize {
         CGSize(
-            width: logicalSize.width * window.displayScale,
-            height: logicalSize.height * window.displayScale)
+            width: window.deviceType.portraitSize.width * window.displayScale,
+            height: window.deviceType.portraitSize.height * window.displayScale)
     }
 
     var body: some View {
         VStack(spacing: 6) {
-            controlBar
+            titleBar
+            buttonRow
             deviceBezel
-            resizeHandle
+            sizeControls
         }
-        .position(
-            x: window.position.x + dragTranslation.width,
-            y: window.position.y + dragTranslation.height
-        )
-        .popover(isPresented: $showSettings) {
+        .offset(x: window.position.x, y: window.position.y)
+        .sheet(isPresented: $showSettings) {
             SimulatorSettingsView(deviceType: window.deviceType)
                 .environmentObject(simulatorManager)
         }
     }
 
-    private var controlBar: some View {
-        HStack(spacing: 16) {
+    // MARK: Title bar — the ONLY draggable area in this whole view, and
+    // nothing else lives inside it, so there is no button for a drag to
+    // ever compete with.
+    private var titleBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal")
+                .foregroundColor(.white.opacity(0.55))
             Text(window.deviceType.displayName)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.white.opacity(0.85))
                 .lineLimit(1)
-            Spacer(minLength: 8)
-            Button { showSettings = true } label: {
-                Image(systemName: "gearshape.fill")
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            Button { window.reloadToken = UUID() } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            Button { window.orientation = window.orientation == .portrait ? .landscape : .portrait } label: {
-                Image(systemName: "rotate.right")
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            Button { window.isMinimized = true } label: {
-                Image(systemName: "minus.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            Button(action: onClose) {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
+            Spacer(minLength: 0)
         }
-        .font(.system(size: 13))
-        .foregroundColor(.white)
         .padding(.horizontal, 12)
-        .frame(width: displaySize.width, height: 28)
+        .frame(width: portraitDisplaySize.width, height: 26)
         .background(Color.black.opacity(0.88))
-        .clipShape(Capsule())
-        // simultaneousGesture (not .gesture) + a minimum distance: lets the
-        // buttons' own tap gestures win for an ordinary tap, and only
-        // starts a drag once the finger has genuinely moved. Using plain
-        // .gesture() here was capturing every touch before it reached the
-        // buttons, which is why none of them were responding.
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 12)
-                .onChanged { dragTranslation = $0.translation }
-                .onEnded { value in
-                    window.position.x += value.translation.width
-                    window.position.y += value.translation.height
-                    dragTranslation = .zero
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 4)
+                .onChanged { value in
+                    window.position.x = window.dragStartPosition.x + value.translation.width
+                    window.position.y = window.dragStartPosition.y + value.translation.height
+                }
+                .onEnded { _ in
+                    window.dragStartPosition = window.position
                 }
         )
+        .onAppear { window.dragStartPosition = window.position }
     }
 
+    // MARK: Button row — plain taps only, no gesture attached to this
+    // row or anything in it.
+    private var buttonRow: some View {
+        HStack(spacing: 18) {
+            simulatorButton("gearshape.fill") { showSettings = true }
+            simulatorButton("arrow.clockwise") { window.reloadToken = UUID() }
+            simulatorButton("rectangle.landscape.rotate") {
+                window.orientation = window.orientation == .portrait ? .landscape : .portrait
+            }
+            simulatorButton("minus.circle.fill") { window.isMinimized = true }
+            simulatorButton("xmark.circle.fill", action: onClose)
+        }
+        .frame(width: portraitDisplaySize.width, height: 26)
+        .background(Color.black.opacity(0.75))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func simulatorButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13))
+                .foregroundColor(.white)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Device bezel — the real frame image, with the web view's
+    // content area sized (not rotated) according to orientation.
     private var deviceBezel: some View {
         let insets = window.deviceType.screenInsets
-        let portraitDisplaySize = CGSize(
-            width: window.deviceType.portraitSize.width * window.displayScale,
-            height: window.deviceType.portraitSize.height * window.displayScale)
-        let screenWidth = portraitDisplaySize.width * (1 - insets.left - insets.right)
-        let screenHeight = portraitDisplaySize.height * (1 - insets.top - insets.bottom)
+        let portraitScreenWidth = portraitDisplaySize.width * (1 - insets.left - insets.right)
+        let portraitScreenHeight = portraitDisplaySize.height * (1 - insets.top - insets.bottom)
         let screenCenterX = portraitDisplaySize.width * (insets.left + (1 - insets.left - insets.right) / 2)
         let screenCenterY = portraitDisplaySize.height * (insets.top + (1 - insets.top - insets.bottom) / 2)
 
+        // Landscape: swap the WEB VIEW CONTENT's width/height so its
+        // contents resize accordingly, letterboxed within the same
+        // portrait screen-hole area — no transform on the frame image
+        // itself (the frame art only exists in portrait).
+        let contentWidth = window.orientation == .portrait ? portraitScreenWidth : portraitScreenHeight
+        let contentHeight = window.orientation == .portrait ? portraitScreenHeight : portraitScreenWidth
+
         return ZStack {
             SimulatorWebView(window: window)
-                .clipShape(RoundedRectangle(cornerRadius: screenWidth * 0.06))
-                .frame(width: screenWidth, height: screenHeight)
+                .clipShape(RoundedRectangle(cornerRadius: min(contentWidth, contentHeight) * 0.05))
+                .frame(width: contentWidth, height: contentHeight)
                 .position(x: screenCenterX, y: screenCenterY)
+                .frame(width: portraitScreenWidth, height: portraitScreenHeight)
+                .position(x: screenCenterX, y: screenCenterY)
+                .clipped()
 
-            // The real device frame — its transparent "screen hole" (see
-            // SimulatorManager.screenInsets, measured from this exact
-            // image) lines up with the web view positioned above.
             Image(window.deviceType.frameImageName)
                 .resizable()
                 .frame(width: portraitDisplaySize.width, height: portraitDisplaySize.height)
         }
         .frame(width: portraitDisplaySize.width, height: portraitDisplaySize.height)
-        // Rotate the whole portrait-shaped composition as one piece for
-        // landscape, rather than stretching the frame image into a
-        // landscape box — keeps the device frame looking correct (not
-        // squished) in both orientations.
-        .rotationEffect(.degrees(window.orientation == .landscape ? 90 : 0))
-        .frame(width: displaySize.width, height: displaySize.height)
-        .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
+        .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
     }
 
-    private var resizeHandle: some View {
-        HStack {
-            Spacer()
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(0.75))
-                .padding(7)
-                .background(Color.black.opacity(0.6))
-                .clipShape(Circle())
-                .contentShape(Circle())
-                .gesture(
-                    DragGesture(minimumDistance: 2)
-                        .onChanged { value in
-                            let delta = (value.translation.width + value.translation.height) / 2
-                            window.displayScale = min(max(resizeStartScale + delta / 500, 0.28), 1.1)
-                        }
-                        .onEnded { _ in resizeStartScale = window.displayScale }
-                )
+    // MARK: Size controls — plain +/- buttons, no drag handle.
+    private var sizeControls: some View {
+        HStack(spacing: 14) {
+            simulatorButton("minus.magnifyingglass") {
+                window.displayScale = max(Self.minScale, window.displayScale - Self.resizeStep)
+            }
+            Text("\(Int(window.displayScale * 100))%")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.8))
+                .frame(minWidth: 34)
+            simulatorButton("plus.magnifyingglass") {
+                window.displayScale = min(Self.maxScale, window.displayScale + Self.resizeStep)
+            }
         }
-        .frame(width: displaySize.width)
+        .padding(.horizontal, 10)
+        .frame(height: 26)
+        .background(Color.black.opacity(0.75))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -202,27 +207,36 @@ private struct SimulatorSettingsView: View {
     @State private var urlText: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("\(deviceType.displayName) URL")
-                .font(.headline)
-            TextField("https://example.com", text: $urlText)
-                .textFieldStyle(.roundedBorder)
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-                .keyboardType(.URL)
-            Text("Saved permanently — reopening the simulator later loads this URL again.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Button("Save & Reload") {
-                guard let url = URL(string: urlText), url.scheme != nil else { return }
-                simulatorManager.saveURL(url, for: deviceType)
-                dismiss()
+        NavigationView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("\(deviceType.displayName) URL")
+                    .font(.headline)
+                TextField("https://example.com", text: $urlText)
+                    .textFieldStyle(.roundedBorder)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                    .keyboardType(.URL)
+                Text("Saved permanently — reopening the simulator later loads this URL again.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Button("Save & Reload") {
+                    guard let url = URL(string: urlText), url.scheme != nil else { return }
+                    simulatorManager.saveURL(url, for: deviceType)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(URL(string: urlText)?.scheme == nil)
+                Spacer()
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(URL(string: urlText)?.scheme == nil)
+            .padding()
+            .navigationTitle("Simulator Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Close") { dismiss() }
+                }
+            }
         }
-        .padding()
-        .frame(width: 300)
         .onAppear {
             urlText = simulatorManager.urlDrafts[deviceType] ?? simulatorManager.savedURL(for: deviceType).absoluteString
         }
@@ -248,7 +262,8 @@ private struct SimulatorMinimizedDockView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .shadow(radius: 6)
         }
-        .position(x: window.position.x, y: window.position.y)
+        .buttonStyle(.plain)
+        .offset(x: window.position.x, y: window.position.y)
     }
 }
 
@@ -260,16 +275,16 @@ struct SimulatorWindowsOverlay: View {
     @ObservedObject var manager = SimulatorManager.shared
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             ForEach(manager.windows) { window in
                 // Always mounted — minimizing only hides/shrinks it, it's
                 // never removed from the tree, so the WKWebView inside
                 // never gets destroyed and recreated (which would reload
-                // the page). See the file header for why.
+                // the page).
                 SimulatorDeviceFrameView(window: window, onClose: { manager.close(window) })
                     .environmentObject(manager)
                     .opacity(window.isMinimized ? 0 : 1)
-                    .scaleEffect(window.isMinimized ? 0.01 : 1)
+                    .scaleEffect(window.isMinimized ? 0.01 : 1, anchor: .topLeading)
                     .allowsHitTesting(!window.isMinimized)
 
                 if window.isMinimized {

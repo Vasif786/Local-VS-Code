@@ -18,7 +18,6 @@ class ExtensionManager: ObservableObject {
         MonacoEditorAuxiliaryExtension(),
         MonacoIntellisenseExtension(),
         RemoteExecutionExtension(),
-        LocalExecutionExtension(),
         TerminalExtension(),
         ImageViewerExtension(),
         VideoViewerExtension(),

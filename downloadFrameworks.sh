@@ -4,18 +4,6 @@ rm -rf Resources
 mkdir -p Resources
 cd Resources
 
-# Python
-curl -OL https://github.com/bummoblizard/cpython/releases/download/1.0.1/cpython.zip
-unzip -q cpython.zip
-rm -f cpython.zip
-
-# llvm
-for lib in ar link libLLVM lld clang nm dis llc lli opt; do
-    curl -OL https://github.com/thebaselab/llvm-project/releases/download/iOS-14/$lib.xcframework.zip
-    unzip -q $lib.xcframework.zip -d llvm
-    rm -f $lib.xcframework.zip 
-done 
-
 # ios_system
 for lib in files curl_ios awk text shell tar ios_system; do
     curl -OL https://github.com/holzschu/ios_system/releases/download/v3.0.0/$lib.xcframework.zip
@@ -46,13 +34,6 @@ curl -OL https://github.com/holzschu/libgit2/releases/download/ios_1.0/lg2.xcfra
 unzip -q lg2.xcframework.zip -d Term
 rm -f lg2.xcframework.zip
 
-# Python auxiliaries
-for lib in harfbuzz freetype libpng; do
-    curl -OL https://github.com/holzschu/Python-aux/releases/download/1.0/$lib.xcframework.zip
-    unzip -q $lib.xcframework.zip -d PythonAux
-    rm -f $lib.xcframework.zip 
-done
-
 # Node.js
 mkdir -p NodeJS
 cd NodeJS
@@ -71,27 +52,9 @@ curl -OL https://github.com/thebaselab/NMSSH/releases/download/2.3.1-p5/NMSSH.xc
 unzip -q NMSSH.xcframework.zip
 rm -f NMSSH.xcframework.zip
 
-# Java
-mkdir -p Java
-cd Java
-curl -OL https://github.com/thebaselab/android-openjdk-build-multiarch/releases/download/v0.2/java-8-zero-frameworks-tools-with-src.zip
-unzip -q java-8-zero-frameworks-tools-with-src.zip
-rm -f java-8-zero-frameworks-tools-with-src.zip
-cd ..
-
-# Python LSP
-curl -OL https://github.com/thebaselab/codeapp-python/releases/download/2024.8.15/python-lsp.zip
-unzip -q python-lsp.zip
-rm -f python-lsp.zip
-
 # monaco editor
 curl -OL https://github.com/thebaselab/codeapp-monaco/releases/download/2025.9.20/monaco-textmate.bundle.zip
 unzip -q monaco-textmate.bundle.zip
 rm -f monaco-textmate.bundle.zip
-
-# Java LSP
-curl -OL https://github.com/thebaselab/codeapp-java/releases/download/2024.8.16/java-lsp.zip
-unzip -q java-lsp.zip
-rm -f java-lsp.zip
 
 echo "Done!"
