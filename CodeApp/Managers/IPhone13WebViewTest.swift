@@ -7,13 +7,8 @@ struct IPhone13WebViewTest: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let webView = WKWebView(frame: .zero)
-
         webView.allowsBackForwardNavigationGestures = true
-
-        webView.load(
-            URLRequest(url: url)
-        )
-
+        webView.load(URLRequest(url: url))
         return webView
     }
 
@@ -22,9 +17,7 @@ struct IPhone13WebViewTest: UIViewRepresentable {
         context: Context
     ) {
         if webView.url != url {
-            webView.load(
-                URLRequest(url: url)
-            )
+            webView.load(URLRequest(url: url))
         }
     }
 }

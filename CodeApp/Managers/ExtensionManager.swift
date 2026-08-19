@@ -28,7 +28,7 @@ class ExtensionManager: ObservableObject {
         RemoteAuxiliaryExtension(),
         RemoteRunExtension(),
         SimulatorExtension(),
-        IPhone13SimulatorButton()
+        
     ]
 
     func registerExtension(ex: CodeAppExtension) {

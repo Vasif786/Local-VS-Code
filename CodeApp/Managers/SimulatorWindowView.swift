@@ -5,29 +5,42 @@
 //  Rendering for one floating simulator window. See SimulatorManager.swift
 //  for the underlying state model.
 //
-//  Safety-first design (rewritten after the drag/resize/rotate gestures
-//  caused the whole screen to become unresponsive): every interactive
-//  control here is a plain SwiftUI Button (tap only). There is exactly
-//  ONE DragGesture in this entire file — on a dedicated grip handle that
-//  has no other control anywhere near or inside it — so it can never
-//  compete with a button's own tap recognition. Resize is +/- buttons,
-//  not a drag handle. Rotation is a plain frame-dimension swap, not a
-//  `.rotationEffect` transform (combining rotation transforms with
-//  reactive `.frame()` sizing is a known source of SwiftUI layout
-//  thrashing, and was the most likely cause of the freeze).
+//  Two important, hard-won fixes baked into this version:
+//
+//  1. VIEWPORT: the web view is always built at the device's real, native
+//     point size (e.g. 390x844 for iPhone 13) — never at the small
+//     on-screen window size. The whole composed device (web view + frame
+//     image) is scaled down visually with `.scaleEffect`, then re-framed
+//     to the scaled-down size so SwiftUI's LAYOUT also shrinks to match.
+//     Constraining the web view's own frame directly (the previous
+//     version) shrinks the actual viewport a page sees, which breaks
+//     responsive layouts (e.g. Flutter's own "bottom overflowed" error),
+//     makes everything look zoomed in, and throws off touch coordinates.
+//     Scaling a correctly-sized view visually keeps all of that correct.
+//
+//  2. HIT-TESTING / FREEZE: minimizing no longer keeps the full window
+//     (including the WKWebView) mounted at 1% scale + 0% opacity. That
+//     technique was meant to preserve page state, but very likely left a
+//     large, still-hit-testable view sitting over the whole app,
+//     swallowing touches everywhere — matching the "entire app frozen,
+//     no button anywhere works" reports. Minimizing now uses plain,
+//     bounded conditional rendering instead: a real stability trade-off
+//     (the page may reload when un-minimizing) in exchange for the rest
+//     of the app reliably staying responsive.
 //
 
 import SwiftUI
 import WebKit
 
-/// Thin WKWebView wrapper. Reloads ONLY when `reloadToken` changes or the
-/// URL itself changes — never on ordinary SwiftUI re-renders, so the
-/// loaded page's state isn't lost by those.
+/// Thin WKWebView wrapper, always built at the device's real point size.
+/// Reloads ONLY when `reloadToken` changes or the URL itself changes —
+/// never on ordinary SwiftUI re-renders.
 private struct SimulatorWebView: UIViewRepresentable {
     @ObservedObject var window: SimulatorWindowState
 
     func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView()
+        let nativeSize = window.deviceType.portraitSize
+        let webView = WKWebView(frame: CGRect(origin: .zero, size: nativeSize))
         webView.load(URLRequest(url: window.url))
         context.coordinator.lastURL = window.url
         context.coordinator.lastReloadToken = window.reloadToken
@@ -54,7 +67,8 @@ private struct SimulatorWebView: UIViewRepresentable {
 }
 
 /// The floating device frame: grip handle + title, button row, bezel,
-/// resize buttons.
+/// resize buttons. Everything inside is laid out at the device's REAL
+/// native size, then the whole thing is scaled down at the very end.
 struct SimulatorDeviceFrameView: View {
     @ObservedObject var window: SimulatorWindowState
     let onClose: () -> Void
@@ -67,11 +81,11 @@ struct SimulatorDeviceFrameView: View {
     private static let minScale: CGFloat = 0.28
     private static let maxScale: CGFloat = 1.1
 
-    /// Portrait frame size (the only orientation the frame image has).
-    private var portraitDisplaySize: CGSize {
-        CGSize(
-            width: window.deviceType.portraitSize.width * window.displayScale,
-            height: window.deviceType.portraitSize.height * window.displayScale)
+    private var nativeSize: CGSize { window.deviceType.portraitSize }
+    /// The final, on-screen footprint after scaling — what the rest of the
+    /// app (drag math, layout) should treat as this window's size.
+    private var scaledSize: CGSize {
+        CGSize(width: nativeSize.width * window.displayScale, height: nativeSize.height * window.displayScale)
     }
 
     var body: some View {
@@ -81,6 +95,13 @@ struct SimulatorDeviceFrameView: View {
             deviceBezel
             sizeControls
         }
+        // Build everything above at native size, then scale the whole
+        // composed window down, then re-declare the frame at the scaled
+        // size so SwiftUI's layout (and hit-testing bounds) match what's
+        // actually visible — this is what keeps a minimized/closed window
+        // from leaving an oversized invisible area behind.
+        .scaleEffect(window.displayScale, anchor: .topLeading)
+        .frame(width: scaledSize.width, height: scaledSize.height, alignment: .topLeading)
         .offset(x: window.position.x + liveDragOffset.width, y: window.position.y + liveDragOffset.height)
         .sheet(isPresented: $showSettings) {
             SimulatorSettingsView(deviceType: window.deviceType)
@@ -96,25 +117,23 @@ struct SimulatorDeviceFrameView: View {
             Image(systemName: "line.3.horizontal")
                 .foregroundColor(.white.opacity(0.55))
             Text(window.deviceType.displayName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 24, weight: .semibold))
                 .foregroundColor(.white.opacity(0.85))
                 .lineLimit(1)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .frame(width: portraitDisplaySize.width, height: 26)
+        .padding(.horizontal, 24)
+        .frame(width: nativeSize.width, height: 56)
         .background(Color.black.opacity(0.88))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
         .contentShape(Rectangle())
         .gesture(
             // Updates a plain local @State during the drag (cheap — only
             // this one small view re-renders). window.position (the
-            // @Published property the WHOLE window tree, including the
-            // web view, observes) is only touched ONCE, at the end. Doing
-            // this on every pixel of movement instead (the previous
-            // version) forced the entire window — web view included — to
-            // re-render 60+ times a second while dragging, which was the
-            // most likely cause of the freeze.
+            // @Published property the whole window observes) is only
+            // touched ONCE, at the end — mutating it on every pixel of
+            // movement was forcing the entire window, web view included,
+            // to re-render dozens of times a second while dragging.
             DragGesture(minimumDistance: 4)
                 .onChanged { value in
                     liveDragOffset = value.translation
@@ -130,67 +149,69 @@ struct SimulatorDeviceFrameView: View {
     // MARK: Button row — plain taps only, no gesture attached to this
     // row or anything in it.
     private var buttonRow: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 36) {
             simulatorButton("gearshape.fill") { showSettings = true }
             simulatorButton("arrow.clockwise") { window.reloadToken = UUID() }
             simulatorButton("minus.circle.fill") { window.isMinimized = true }
             simulatorButton("xmark.circle.fill", action: onClose)
         }
-        .frame(width: portraitDisplaySize.width, height: 26)
+        .frame(width: nativeSize.width, height: 56)
         .background(Color.black.opacity(0.75))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
     private func simulatorButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 13))
+                .font(.system(size: 26))
                 .foregroundColor(.white)
-                .frame(width: 26, height: 26)
+                .frame(width: 56, height: 56)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: Device bezel — the real frame image, with the web view content
-    // simply padded to sit inside the frame's transparent screen area.
+    // MARK: Device bezel — the real frame image, with the web view (built
+    // at the device's real native size) padded to sit inside the frame's
+    // transparent screen area.
     private var deviceBezel: some View {
         let insets = window.deviceType.screenInsets
-        let leftPad = portraitDisplaySize.width * insets.left
-        let rightPad = portraitDisplaySize.width * insets.right
-        let topPad = portraitDisplaySize.height * insets.top
-        let bottomPad = portraitDisplaySize.height * insets.bottom
+        let leftPad = nativeSize.width * insets.left
+        let rightPad = nativeSize.width * insets.right
+        let topPad = nativeSize.height * insets.top
+        let bottomPad = nativeSize.height * insets.bottom
 
         return ZStack {
             SimulatorWebView(window: window)
+                .frame(width: nativeSize.width, height: nativeSize.height)
                 .padding(EdgeInsets(top: topPad, leading: leftPad, bottom: bottomPad, trailing: rightPad))
-                .clipShape(RoundedRectangle(cornerRadius: portraitDisplaySize.width * 0.05))
+                .clipShape(RoundedRectangle(cornerRadius: nativeSize.width * 0.05))
 
             Image(window.deviceType.frameImageName)
                 .resizable()
         }
-        .frame(width: portraitDisplaySize.width, height: portraitDisplaySize.height)
+        .frame(width: nativeSize.width, height: nativeSize.height)
         .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
     }
 
     // MARK: Size controls — plain +/- buttons, no drag handle.
     private var sizeControls: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 28) {
             simulatorButton("minus.magnifyingglass") {
                 window.displayScale = max(Self.minScale, window.displayScale - Self.resizeStep)
             }
             Text("\(Int(window.displayScale * 100))%")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 22, weight: .medium))
                 .foregroundColor(.white.opacity(0.8))
-                .frame(minWidth: 34)
+                .frame(minWidth: 70)
             simulatorButton("plus.magnifyingglass") {
                 window.displayScale = min(Self.maxScale, window.displayScale + Self.resizeStep)
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 26)
+        .padding(.horizontal, 20)
+        .frame(width: nativeSize.width, height: 56)
         .background(Color.black.opacity(0.75))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }
 
@@ -265,29 +286,26 @@ private struct SimulatorMinimizedDockView: View {
 /// triggered from the toolbar. Add this once near the top of the app's
 /// main view hierarchy (see MainScene.swift), above everything else, the
 /// same way `NotificationCentreView` is already added there.
+///
+/// Deliberately plain `if/else` per window (not opacity/scaleEffect
+/// tricks to "hide but keep mounted") — each branch only occupies its own
+/// small, real bounds, so there's no way for a minimized or closed window
+/// to leave an oversized, still-tappable area behind that could block
+/// touches to the rest of the app.
 struct SimulatorWindowsOverlay: View {
     @ObservedObject var manager = SimulatorManager.shared
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             ForEach(manager.windows) { window in
-                // Always mounted — minimizing only hides/shrinks it, it's
-                // never removed from the tree, so the WKWebView inside
-                // never gets destroyed and recreated (which would reload
-                // the page).
-                SimulatorDeviceFrameView(window: window, onClose: { manager.close(window) })
-                    .environmentObject(manager)
-                    .opacity(window.isMinimized ? 0 : 1)
-                    .scaleEffect(window.isMinimized ? 0.01 : 1, anchor: .topLeading)
-                    .allowsHitTesting(!window.isMinimized)
-
                 if window.isMinimized {
                     SimulatorMinimizedDockView(window: window)
+                } else {
+                    SimulatorDeviceFrameView(window: window, onClose: { manager.close(window) })
+                        .environmentObject(manager)
                 }
             }
         }
-        // With no windows open, this overlay must not swallow taps meant
-        // for the rest of the app underneath it.
         .allowsHitTesting(!manager.windows.isEmpty)
         .confirmationDialog(
             "Open Simulator", isPresented: $manager.showDevicePicker, titleVisibility: .visible
