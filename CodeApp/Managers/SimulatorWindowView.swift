@@ -60,6 +60,7 @@ struct SimulatorDeviceFrameView: View {
     let onClose: () -> Void
 
     @State private var showSettings = false
+    @State private var liveDragOffset: CGSize = .zero
     @EnvironmentObject var simulatorManager: SimulatorManager
 
     private static let resizeStep: CGFloat = 0.08
@@ -80,7 +81,7 @@ struct SimulatorDeviceFrameView: View {
             deviceBezel
             sizeControls
         }
-        .offset(x: window.position.x, y: window.position.y)
+        .offset(x: window.position.x + liveDragOffset.width, y: window.position.y + liveDragOffset.height)
         .sheet(isPresented: $showSettings) {
             SimulatorSettingsView(deviceType: window.deviceType)
                 .environmentObject(simulatorManager)
@@ -106,16 +107,24 @@ struct SimulatorDeviceFrameView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         .gesture(
+            // Updates a plain local @State during the drag (cheap — only
+            // this one small view re-renders). window.position (the
+            // @Published property the WHOLE window tree, including the
+            // web view, observes) is only touched ONCE, at the end. Doing
+            // this on every pixel of movement instead (the previous
+            // version) forced the entire window — web view included — to
+            // re-render 60+ times a second while dragging, which was the
+            // most likely cause of the freeze.
             DragGesture(minimumDistance: 4)
                 .onChanged { value in
-                    window.position.x = window.dragStartPosition.x + value.translation.width
-                    window.position.y = window.dragStartPosition.y + value.translation.height
+                    liveDragOffset = value.translation
                 }
-                .onEnded { _ in
-                    window.dragStartPosition = window.position
+                .onEnded { value in
+                    window.position.x += value.translation.width
+                    window.position.y += value.translation.height
+                    liveDragOffset = .zero
                 }
         )
-        .onAppear { window.dragStartPosition = window.position }
     }
 
     // MARK: Button row — plain taps only, no gesture attached to this
@@ -124,9 +133,6 @@ struct SimulatorDeviceFrameView: View {
         HStack(spacing: 18) {
             simulatorButton("gearshape.fill") { showSettings = true }
             simulatorButton("arrow.clockwise") { window.reloadToken = UUID() }
-            simulatorButton("rectangle.landscape.rotate") {
-                window.orientation = window.orientation == .portrait ? .landscape : .portrait
-            }
             simulatorButton("minus.circle.fill") { window.isMinimized = true }
             simulatorButton("xmark.circle.fill", action: onClose)
         }
@@ -146,34 +152,22 @@ struct SimulatorDeviceFrameView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: Device bezel — the real frame image, with the web view's
-    // content area sized (not rotated) according to orientation.
+    // MARK: Device bezel — the real frame image, with the web view content
+    // simply padded to sit inside the frame's transparent screen area.
     private var deviceBezel: some View {
         let insets = window.deviceType.screenInsets
-        let portraitScreenWidth = portraitDisplaySize.width * (1 - insets.left - insets.right)
-        let portraitScreenHeight = portraitDisplaySize.height * (1 - insets.top - insets.bottom)
-        let screenCenterX = portraitDisplaySize.width * (insets.left + (1 - insets.left - insets.right) / 2)
-        let screenCenterY = portraitDisplaySize.height * (insets.top + (1 - insets.top - insets.bottom) / 2)
-
-        // Landscape: swap the WEB VIEW CONTENT's width/height so its
-        // contents resize accordingly, letterboxed within the same
-        // portrait screen-hole area — no transform on the frame image
-        // itself (the frame art only exists in portrait).
-        let contentWidth = window.orientation == .portrait ? portraitScreenWidth : portraitScreenHeight
-        let contentHeight = window.orientation == .portrait ? portraitScreenHeight : portraitScreenWidth
+        let leftPad = portraitDisplaySize.width * insets.left
+        let rightPad = portraitDisplaySize.width * insets.right
+        let topPad = portraitDisplaySize.height * insets.top
+        let bottomPad = portraitDisplaySize.height * insets.bottom
 
         return ZStack {
             SimulatorWebView(window: window)
-                .clipShape(RoundedRectangle(cornerRadius: min(contentWidth, contentHeight) * 0.05))
-                .frame(width: contentWidth, height: contentHeight)
-                .position(x: screenCenterX, y: screenCenterY)
-                .frame(width: portraitScreenWidth, height: portraitScreenHeight)
-                .position(x: screenCenterX, y: screenCenterY)
-                .clipped()
+                .padding(EdgeInsets(top: topPad, leading: leftPad, bottom: bottomPad, trailing: rightPad))
+                .clipShape(RoundedRectangle(cornerRadius: portraitDisplaySize.width * 0.05))
 
             Image(window.deviceType.frameImageName)
                 .resizable()
-                .frame(width: portraitDisplaySize.width, height: portraitDisplaySize.height)
         }
         .frame(width: portraitDisplaySize.width, height: portraitDisplaySize.height)
         .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
