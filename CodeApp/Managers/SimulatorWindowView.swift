@@ -5,28 +5,37 @@
 //  Rendering for one floating simulator window. See SimulatorManager.swift
 //  for the underlying state model.
 //
-//  Two important, hard-won fixes baked into this version:
+//  Key fixes in this version:
 //
 //  1. VIEWPORT: the web view is always built at the device's real, native
-//     point size (e.g. 390x844 for iPhone 13) — never at the small
-//     on-screen window size. The whole composed device (web view + frame
-//     image) is scaled down visually with `.scaleEffect`, then re-framed
-//     to the scaled-down size so SwiftUI's LAYOUT also shrinks to match.
-//     Constraining the web view's own frame directly (the previous
-//     version) shrinks the actual viewport a page sees, which breaks
-//     responsive layouts (e.g. Flutter's own "bottom overflowed" error),
-//     makes everything look zoomed in, and throws off touch coordinates.
-//     Scaling a correctly-sized view visually keeps all of that correct.
+//     point size (e.g. 390x844 for iPhone 13) so pages get a correct, real
+//     mobile viewport — never at the small on-screen window size (which
+//     was making everything look zoomed in, breaking responsive layouts
+//     like Flutter's own "bottom overflowed" warning, and throwing off
+//     touch coordinates on the loaded page).
 //
-//  2. HIT-TESTING / FREEZE: minimizing no longer keeps the full window
-//     (including the WKWebView) mounted at 1% scale + 0% opacity. That
-//     technique was meant to preserve page state, but very likely left a
-//     large, still-hit-testable view sitting over the whole app,
-//     swallowing touches everywhere — matching the "entire app frozen,
-//     no button anywhere works" reports. Minimizing now uses plain,
-//     bounded conditional rendering instead: a real stability trade-off
-//     (the page may reload when un-minimizing) in exchange for the rest
-//     of the app reliably staying responsive.
+//  2. SCALING IS SELF-CONTAINED TO THE BEZEL ONLY. The previous version
+//     scaled the ENTIRE window (title bar + buttons + bezel + size
+//     controls together) with `.scaleEffect`, then re-declared its frame
+//     using only the *bezel's* scaled size — which didn't match the
+//     window's true total (scaled) height, since it left out the title
+//     bar/button row/size-controls rows. That mismatch is the most likely
+//     cause of the button row appearing to render behind/under the bezel,
+//     the window drifting to the wrong on-screen position, and quite
+//     possibly the crash on any button press (SwiftUI reconciling a
+//     grossly mismatched frame during a layout pass). Now `.scaleEffect`
+//     is applied ONLY inside `deviceBezel`, which is self-contained: its
+//     pre-scale frame is exactly what gets scaled, so the frame reclaimed
+//     after scaling is always exactly correct — no mismatch possible.
+//     Everything else (title bar, buttons, size controls) is sized with
+//     small, fixed, directly-chosen values — no scale-then-reframe math
+//     for the parts users actually tap.
+//
+//  3. HIT-TESTING / FREEZE: minimizing uses plain, bounded conditional
+//     rendering (not an opacity/scaleEffect "hidden but still mounted"
+//     trick), so a minimized or closed window can never leave an
+//     oversized, still-tappable area behind that could block touches to
+//     the rest of the app.
 //
 
 import SwiftUI
@@ -67,8 +76,7 @@ private struct SimulatorWebView: UIViewRepresentable {
 }
 
 /// The floating device frame: grip handle + title, button row, bezel,
-/// resize buttons. Everything inside is laid out at the device's REAL
-/// native size, then the whole thing is scaled down at the very end.
+/// resize buttons.
 struct SimulatorDeviceFrameView: View {
     @ObservedObject var window: SimulatorWindowState
     let onClose: () -> Void
@@ -80,12 +88,25 @@ struct SimulatorDeviceFrameView: View {
     private static let resizeStep: CGFloat = 0.08
     private static let minScale: CGFloat = 0.28
     private static let maxScale: CGFloat = 1.1
+    /// Fixed on-screen width for the control rows and background panel —
+    /// intentionally NOT derived from any native-size/scale math, so it
+    /// can never drift out of sync with what actually gets rendered.
+    private static let barWidth: CGFloat = 220
+    private static let rowHeight: CGFloat = 28
 
     private var nativeSize: CGSize { window.deviceType.portraitSize }
-    /// The final, on-screen footprint after scaling — what the rest of the
-    /// app (drag math, layout) should treat as this window's size.
-    private var scaledSize: CGSize {
+    /// The bezel's own on-screen size — this is the ONLY place scaling
+    /// happens, and it's self-consistent by construction (see deviceBezel).
+    private var scaledBezelSize: CGSize {
         CGSize(width: nativeSize.width * window.displayScale, height: nativeSize.height * window.displayScale)
+    }
+    /// True total on-screen footprint of the whole window (title bar +
+    /// button row + bezel + size controls + spacing) — used for the
+    /// background panel and to keep the window on-screen. Computed once,
+    /// directly, so it can never mismatch the actual rendered content.
+    private var totalWindowSize: CGSize {
+        let height = Self.rowHeight * 3 + 18 + scaledBezelSize.height  // 3 rows + 3×6pt spacing
+        return CGSize(width: max(Self.barWidth, scaledBezelSize.width) + 16, height: height + 16)
     }
 
     var body: some View {
@@ -95,13 +116,12 @@ struct SimulatorDeviceFrameView: View {
             deviceBezel
             sizeControls
         }
-        // Build everything above at native size, then scale the whole
-        // composed window down, then re-declare the frame at the scaled
-        // size so SwiftUI's layout (and hit-testing bounds) match what's
-        // actually visible — this is what keeps a minimized/closed window
-        // from leaving an oversized invisible area behind.
-        .scaleEffect(window.displayScale, anchor: .topLeading)
-        .frame(width: scaledSize.width, height: scaledSize.height, alignment: .topLeading)
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.init("sideBar.background"))
+                .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+        )
         .offset(x: window.position.x + liveDragOffset.width, y: window.position.y + liveDragOffset.height)
         .sheet(isPresented: $showSettings) {
             SimulatorSettingsView(deviceType: window.deviceType)
@@ -113,27 +133,26 @@ struct SimulatorDeviceFrameView: View {
     // nothing else lives inside it, so there is no button for a drag to
     // ever compete with.
     private var titleBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal")
+                .font(.system(size: 11))
                 .foregroundColor(.white.opacity(0.55))
             Text(window.deviceType.displayName)
-                .font(.system(size: 24, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.white.opacity(0.85))
                 .lineLimit(1)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 24)
-        .frame(width: nativeSize.width, height: 56)
+        .padding(.horizontal, 10)
+        .frame(width: max(Self.barWidth, scaledBezelSize.width), height: Self.rowHeight)
         .background(Color.black.opacity(0.88))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         .gesture(
             // Updates a plain local @State during the drag (cheap — only
             // this one small view re-renders). window.position (the
             // @Published property the whole window observes) is only
-            // touched ONCE, at the end — mutating it on every pixel of
-            // movement was forcing the entire window, web view included,
-            // to re-render dozens of times a second while dragging.
+            // touched ONCE, at the end.
             DragGesture(minimumDistance: 4)
                 .onChanged { value in
                     liveDragOffset = value.translation
@@ -149,31 +168,34 @@ struct SimulatorDeviceFrameView: View {
     // MARK: Button row — plain taps only, no gesture attached to this
     // row or anything in it.
     private var buttonRow: some View {
-        HStack(spacing: 36) {
+        HStack(spacing: 22) {
             simulatorButton("gearshape.fill") { showSettings = true }
             simulatorButton("arrow.clockwise") { window.reloadToken = UUID() }
             simulatorButton("minus.circle.fill") { window.isMinimized = true }
             simulatorButton("xmark.circle.fill", action: onClose)
         }
-        .frame(width: nativeSize.width, height: 56)
+        .frame(width: max(Self.barWidth, scaledBezelSize.width), height: Self.rowHeight)
         .background(Color.black.opacity(0.75))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func simulatorButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 26))
+                .font(.system(size: 14))
                 .foregroundColor(.white)
-                .frame(width: 56, height: 56)
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: Device bezel — the real frame image, with the web view (built
-    // at the device's real native size) padded to sit inside the frame's
-    // transparent screen area.
+    // MARK: Device bezel — the real frame image, with a web view built at
+    // the device's true native size padded to sit inside the frame's
+    // transparent screen area. Scaling is entirely self-contained here:
+    // the `.frame()` right before `.scaleEffect` is exactly what gets
+    // scaled, so the `.frame()` right after is always exactly correct —
+    // there is no other content mixed into this calculation.
     private var deviceBezel: some View {
         let insets = window.deviceType.screenInsets
         let leftPad = nativeSize.width * insets.left
@@ -181,7 +203,7 @@ struct SimulatorDeviceFrameView: View {
         let topPad = nativeSize.height * insets.top
         let bottomPad = nativeSize.height * insets.bottom
 
-        return ZStack {
+        let bezelContent = ZStack {
             SimulatorWebView(window: window)
                 .frame(width: nativeSize.width, height: nativeSize.height)
                 .padding(EdgeInsets(top: topPad, leading: leftPad, bottom: bottomPad, trailing: rightPad))
@@ -191,27 +213,30 @@ struct SimulatorDeviceFrameView: View {
                 .resizable()
         }
         .frame(width: nativeSize.width, height: nativeSize.height)
-        .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+
+        return bezelContent
+            .scaleEffect(window.displayScale)
+            .frame(width: scaledBezelSize.width, height: scaledBezelSize.height)
     }
 
     // MARK: Size controls — plain +/- buttons, no drag handle.
     private var sizeControls: some View {
-        HStack(spacing: 28) {
+        HStack(spacing: 16) {
             simulatorButton("minus.magnifyingglass") {
                 window.displayScale = max(Self.minScale, window.displayScale - Self.resizeStep)
             }
             Text("\(Int(window.displayScale * 100))%")
-                .font(.system(size: 22, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white.opacity(0.8))
-                .frame(minWidth: 70)
+                .frame(minWidth: 34)
             simulatorButton("plus.magnifyingglass") {
                 window.displayScale = min(Self.maxScale, window.displayScale + Self.resizeStep)
             }
         }
-        .padding(.horizontal, 20)
-        .frame(width: nativeSize.width, height: 56)
+        .padding(.horizontal, 10)
+        .frame(width: max(Self.barWidth, scaledBezelSize.width), height: Self.rowHeight)
         .background(Color.black.opacity(0.75))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 

@@ -144,11 +144,11 @@ final class SimulatorManager: ObservableObject {
             existing.isMinimized = false
             return
         }
-        let offset = CGFloat(windows.count * 28)
+        let offset = CGFloat(windows.count * 24)
         let window = SimulatorWindowState(
             deviceType: deviceType,
             url: savedURL(for: deviceType),
-            position: CGPoint(x: 220 + offset, y: 260 + offset)
+            position: CGPoint(x: 40 + offset, y: 60 + offset)
         )
         windows.append(window)
     }
