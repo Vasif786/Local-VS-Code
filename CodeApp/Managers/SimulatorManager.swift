@@ -12,39 +12,45 @@ import Foundation
 import SwiftUI
 
 enum SimulatorDeviceType: String, CaseIterable {
-    case iPhone13Pro
+    case iPhone14Pro
     case iPadPro
 
     var displayName: String {
         switch self {
-        case .iPhone13Pro: return "iPhone 13 Pro"
+        case .iPhone14Pro: return "iPhone 14 Pro"
         case .iPadPro: return "iPad Pro"
         }
     }
 
     var sfSymbol: String {
         switch self {
-        case .iPhone13Pro: return "iphone"
+        case .iPhone14Pro: return "iphone"
         case .iPadPro: return "ipad"
         }
     }
 
     /// Asset catalog name of the real device-frame image (see
-    /// Assets.xcassets/SimulatorFrameiPhone.imageset and
+    /// Assets.xcassets/SimulatorFrameiPhone14Pro.imageset and
     /// .../SimulatorFrameiPad.imageset).
     var frameImageName: String {
         switch self {
-        case .iPhone13Pro: return "SimulatorFrameiPhone"
+        case .iPhone14Pro: return "SimulatorFrameiPhone14Pro"
         case .iPadPro: return "SimulatorFrameiPad"
         }
     }
 
-    /// The frame image's own pixel size, in portrait — used as the aspect
-    /// ratio basis so the frame image is never stretched/distorted.
+    /// The REAL device's own logical point resolution — what Safari on an
+    /// actual device reports as its viewport (e.g. `window.innerWidth`).
+    /// This is what the web view is built at, so pages get a genuine
+    /// mobile viewport and render exactly as they would on a real device.
+    /// (Previously this used the frame image's own pixel dimensions
+    /// instead, which don't match any real device's viewport — that
+    /// mismatch was the actual root cause of content looking too
+    /// big/zoomed, regardless of on-screen scaling.)
     var portraitSize: CGSize {
         switch self {
-        case .iPhone13Pro: return CGSize(width: 536, height: 1008)
-        case .iPadPro: return CGSize(width: 708, height: 1020)
+        case .iPhone14Pro: return CGSize(width: 393, height: 852)
+        case .iPadPro: return CGSize(width: 768, height: 1024)
         }
     }
 
@@ -52,10 +58,11 @@ enum SimulatorDeviceType: String, CaseIterable {
     /// fraction of the frame's own width/height — measured directly from
     /// the transparent "screen hole" in the actual provided frame images
     /// (flood-filled from the center to find its exact bounding box), not
-    /// guessed.
+    /// guessed. These are fractions, so they apply correctly regardless of
+    /// portraitSize being different from the image's own pixel dimensions.
     var screenInsets: (left: CGFloat, right: CGFloat, top: CGFloat, bottom: CGFloat) {
         switch self {
-        case .iPhone13Pro: return (0.099, 0.103, 0.047, 0.054)
+        case .iPhone14Pro: return (0.0519, 0.0496, 0.0217, 0.0221)
         case .iPadPro: return (0.073, 0.090, 0.091, 0.108)
         }
     }

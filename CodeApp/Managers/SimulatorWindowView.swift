@@ -83,11 +83,13 @@ struct SimulatorDeviceFrameView: View {
 
     @State private var showSettings = false
     @State private var liveDragOffset: CGSize = .zero
+    @GestureState private var liveMagnification: CGFloat = 1.0
     @EnvironmentObject var simulatorManager: SimulatorManager
 
     private static let resizeStep: CGFloat = 0.08
     private static let minScale: CGFloat = 0.28
-    private static let maxScale: CGFloat = 1.1
+    private static let maxScale: CGFloat = 1.3
+    private static let maximizedScale: CGFloat = 1.1
     /// Fixed on-screen width for the control rows and background panel —
     /// intentionally NOT derived from any native-size/scale math, so it
     /// can never drift out of sync with what actually gets rendered.
@@ -95,10 +97,22 @@ struct SimulatorDeviceFrameView: View {
     private static let rowHeight: CGFloat = 28
 
     private var nativeSize: CGSize { window.deviceType.portraitSize }
+    /// The device's own footprint, swapped for landscape — a clean 90°
+    /// swap has an exact, simple bounding box (unlike a partial rotation
+    /// angle, whose bounding box changes continuously), so this stays
+    /// exact regardless of orientation.
+    private var orientedNativeSize: CGSize {
+        window.orientation == .landscape
+            ? CGSize(width: nativeSize.height, height: nativeSize.width)
+            : nativeSize
+    }
     /// The bezel's own on-screen size — this is the ONLY place scaling
-    /// happens, and it's self-consistent by construction (see deviceBezel).
+    /// happens (based on the COMMITTED scale, not the live pinch value —
+    /// see deviceBezel), so it's self-consistent by construction.
     private var scaledBezelSize: CGSize {
-        CGSize(width: nativeSize.width * window.displayScale, height: nativeSize.height * window.displayScale)
+        CGSize(
+            width: orientedNativeSize.width * window.displayScale,
+            height: orientedNativeSize.height * window.displayScale)
     }
     /// True total on-screen footprint of the whole window (title bar +
     /// button row + bezel + size controls + spacing) — used for the
@@ -168,9 +182,12 @@ struct SimulatorDeviceFrameView: View {
     // MARK: Button row — plain taps only, no gesture attached to this
     // row or anything in it.
     private var buttonRow: some View {
-        HStack(spacing: 22) {
+        HStack(spacing: 18) {
             simulatorButton("gearshape.fill") { showSettings = true }
             simulatorButton("arrow.clockwise") { window.reloadToken = UUID() }
+            simulatorButton("arrow.up.left.and.arrow.down.right") {
+                window.displayScale = Self.maximizedScale
+            }
             simulatorButton("minus.circle.fill") { window.isMinimized = true }
             simulatorButton("xmark.circle.fill", action: onClose)
         }
@@ -192,10 +209,16 @@ struct SimulatorDeviceFrameView: View {
 
     // MARK: Device bezel — the real frame image, with a web view built at
     // the device's true native size padded to sit inside the frame's
-    // transparent screen area. Scaling is entirely self-contained here:
-    // the `.frame()` right before `.scaleEffect` is exactly what gets
-    // scaled, so the `.frame()` right after is always exactly correct —
+    // transparent screen area. Scaling/rotation is entirely self-contained
+    // here: each `.frame()` exactly matches what was just transformed, so
     // there is no other content mixed into this calculation.
+    //
+    // Two-finger gestures live here: pinch resizes (live preview via
+    // @GestureState, committed to window.displayScale on release); a
+    // two-finger twist past ~30° snaps portrait/landscape (a discrete
+    // snap, not free rotation — a clean 90° swap has an exact, simple
+    // bounding box, whereas a partial angle's bounding box changes
+    // continuously and would reintroduce the earlier size-mismatch bug).
     private var deviceBezel: some View {
         let insets = window.deviceType.screenInsets
         let leftPad = nativeSize.width * insets.left
@@ -214,9 +237,29 @@ struct SimulatorDeviceFrameView: View {
         }
         .frame(width: nativeSize.width, height: nativeSize.height)
 
+        let isLandscape = window.orientation == .landscape
+        let liveScale = window.displayScale * liveMagnification
+
         return bezelContent
-            .scaleEffect(window.displayScale)
-            .frame(width: scaledBezelSize.width, height: scaledBezelSize.height)
+            .rotationEffect(.degrees(isLandscape ? 90 : 0))
+            .frame(width: orientedNativeSize.width, height: orientedNativeSize.height)
+            .scaleEffect(liveScale)
+            .frame(width: orientedNativeSize.width * liveScale, height: orientedNativeSize.height * liveScale)
+            .gesture(
+                SimultaneousGesture(
+                    MagnificationGesture()
+                        .updating($liveMagnification) { value, state, _ in state = value }
+                        .onEnded { value in
+                            window.displayScale = min(max(window.displayScale * value, Self.minScale), Self.maxScale)
+                        },
+                    RotationGesture()
+                        .onEnded { angle in
+                            if abs(angle.degrees) > 30 {
+                                window.orientation = window.orientation == .portrait ? .landscape : .portrait
+                            }
+                        }
+                )
+            )
     }
 
     // MARK: Size controls — plain +/- buttons, no drag handle.
@@ -335,7 +378,7 @@ struct SimulatorWindowsOverlay: View {
         .confirmationDialog(
             "Open Simulator", isPresented: $manager.showDevicePicker, titleVisibility: .visible
         ) {
-            Button("iPhone") { manager.open(deviceType: .iPhone13Pro) }
+            Button("iPhone") { manager.open(deviceType: .iPhone14Pro) }
             Button("iPad") { manager.open(deviceType: .iPadPro) }
             Button("Cancel", role: .cancel) {}
         }
