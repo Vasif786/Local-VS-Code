@@ -7,71 +7,118 @@
 //
 //  Key fixes in this version:
 //
-//  1. VIEWPORT: the web view is always built at the device's real, native
-//     point size (e.g. 390x844 for iPhone 13) so pages get a correct, real
-//     mobile viewport — never at the small on-screen window size (which
-//     was making everything look zoomed in, breaking responsive layouts
-//     like Flutter's own "bottom overflowed" warning, and throwing off
-//     touch coordinates on the loaded page).
+//  1. TOUCH INSIDE THE WEB PAGE: the web view's visual scale/rotation is
+//     now applied with a plain UIKit `CGAffineTransform` directly on the
+//     WKWebView itself (inside `updateUIView`), not with SwiftUI's
+//     `.scaleEffect`/`.rotationEffect` on an ancestor view. SwiftUI's
+//     modifiers apply an *external* Core Animation layer transform that
+//     WKWebView's own internal touch/JS-event coordinate handling doesn't
+//     reliably account for — which is very likely why taps inside the
+//     loaded page weren't registering. `UIView.transform` is the
+//     long-standing, standard way apps shrink a live, interactive view
+//     (e.g. a "live thumbnail") while keeping its own touch handling
+//     correctly mapped, since UIKit's hit-testing is built around it.
 //
-//  2. SCALING IS SELF-CONTAINED TO THE BEZEL ONLY. The previous version
-//     scaled the ENTIRE window (title bar + buttons + bezel + size
-//     controls together) with `.scaleEffect`, then re-declared its frame
-//     using only the *bezel's* scaled size — which didn't match the
-//     window's true total (scaled) height, since it left out the title
-//     bar/button row/size-controls rows. That mismatch is the most likely
-//     cause of the button row appearing to render behind/under the bezel,
-//     the window drifting to the wrong on-screen position, and quite
-//     possibly the crash on any button press (SwiftUI reconciling a
-//     grossly mismatched frame during a layout pass). Now `.scaleEffect`
-//     is applied ONLY inside `deviceBezel`, which is self-contained: its
-//     pre-scale frame is exactly what gets scaled, so the frame reclaimed
-//     after scaling is always exactly correct — no mismatch possible.
-//     Everything else (title bar, buttons, size controls) is sized with
-//     small, fixed, directly-chosen values — no scale-then-reframe math
-//     for the parts users actually tap.
+//  2. FREEZE: all pinch/rotate gesture handling is now commit-only — the
+//     transform is only recomputed once, in `onEnded`, never on every
+//     frame of the gesture. Repeatedly reconciling an external transform
+//     over a WKWebView's layer tree at gesture frame-rate is a plausible
+//     contributor to the freezing reported earlier; removing that
+//     per-frame churn removes the risk regardless of the exact cause.
 //
-//  3. HIT-TESTING / FREEZE: minimizing uses plain, bounded conditional
-//     rendering (not an opacity/scaleEffect "hidden but still mounted"
-//     trick), so a minimized or closed window can never leave an
-//     oversized, still-tappable area behind that could block touches to
-//     the rest of the app.
+//  3. MOVING THE WINDOW: a plain single-finger drag now works directly on
+//     the device bezel itself (in addition to the title bar's own drag),
+//     combined with the two-finger pinch/rotate via `SimultaneousGesture`
+//     — a single-finger drag and a two-finger pinch/rotate are
+//     unambiguous to iOS's gesture system since they involve a different
+//     number of touches, so these don't conflict with each other.
+//
+//  4. Explicit `.zIndex` on the control rows guards against them ever
+//     rendering underneath the bezel (reported specifically on iPad).
 //
 
 import SwiftUI
 import WebKit
 
-/// Thin WKWebView wrapper, always built at the device's real point size.
-/// Reloads ONLY when `reloadToken` changes or the URL itself changes —
-/// never on ordinary SwiftUI re-renders.
+/// Wraps a WKWebView inside a plain container. The web view is always
+/// built at the device's real point size (correct viewport for the page);
+/// its on-screen appearance is scaled/rotated via `UIView.transform`
+/// (never SwiftUI's `.scaleEffect`/`.rotationEffect`), and only updated
+/// when the committed scale/orientation actually change — not on every
+/// SwiftUI re-render, and never live during a gesture.
 private struct SimulatorWebView: UIViewRepresentable {
     @ObservedObject var window: SimulatorWindowState
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.clipsToBounds = true
+
         let nativeSize = window.deviceType.portraitSize
         let webView = WKWebView(frame: CGRect(origin: .zero, size: nativeSize))
         webView.load(URLRequest(url: window.url))
+        container.addSubview(webView)
+
+        context.coordinator.webView = webView
         context.coordinator.lastURL = window.url
         context.coordinator.lastReloadToken = window.reloadToken
-        return webView
+        context.coordinator.applyLayout(window: window, containerBounds: container.bounds)
+        return container
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.lastURL != window.url
+    func updateUIView(_ container: UIView, context: Context) {
+        guard let webView = context.coordinator.webView else { return }
+
+        if context.coordinator.lastURL != window.url
             || context.coordinator.lastReloadToken != window.reloadToken
-        else {
-            return
+        {
+            context.coordinator.lastURL = window.url
+            context.coordinator.lastReloadToken = window.reloadToken
+            webView.load(URLRequest(url: window.url))
         }
-        context.coordinator.lastURL = window.url
-        context.coordinator.lastReloadToken = window.reloadToken
-        webView.load(URLRequest(url: window.url))
+
+        context.coordinator.applyLayout(window: window, containerBounds: container.bounds)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
+        weak var webView: WKWebView?
         var lastURL: URL?
         var lastReloadToken: UUID?
+        private var lastScale: CGFloat?
+        private var lastOrientation: SimulatorOrientation?
+
+        /// Only touches layout when scale/orientation actually changed —
+        /// cheap no-op on ordinary re-renders (drag, etc.).
+        ///
+        /// The web view's own `.bounds` are swapped for landscape — this
+        /// gives the loaded page a genuinely landscape-shaped viewport
+        /// (real width/height swap, exactly like an actual device
+        /// rotation), so it reflows for real, not just appears rotated.
+        /// Only a plain scale is applied visually via `.transform` (no
+        /// rotation transform — the bounds swap already handles
+        /// orientation). `.bounds`/`.center` are used instead of `.frame`,
+        /// since UIKit's own docs say `.frame` is undefined once
+        /// `.transform` isn't the identity transform.
+        func applyLayout(window: SimulatorWindowState, containerBounds: CGRect) {
+            guard let webView = webView else { return }
+            guard lastScale != window.displayScale || lastOrientation != window.orientation else {
+                return
+            }
+            lastScale = window.displayScale
+            lastOrientation = window.orientation
+
+            let nativeSize = window.deviceType.portraitSize
+            let orientedSize =
+                window.orientation == .landscape
+                ? CGSize(width: nativeSize.height, height: nativeSize.width)
+                : nativeSize
+
+            webView.transform = .identity
+            webView.bounds = CGRect(origin: .zero, size: orientedSize)
+            webView.center = CGPoint(x: containerBounds.midX, y: containerBounds.midY)
+            webView.transform = CGAffineTransform(scaleX: window.displayScale, y: window.displayScale)
+        }
     }
 }
 
@@ -83,7 +130,6 @@ struct SimulatorDeviceFrameView: View {
 
     @State private var showSettings = false
     @State private var liveDragOffset: CGSize = .zero
-    @GestureState private var liveMagnification: CGFloat = 1.0
     @EnvironmentObject var simulatorManager: SimulatorManager
 
     private static let resizeStep: CGFloat = 0.08
@@ -99,28 +145,19 @@ struct SimulatorDeviceFrameView: View {
     private var nativeSize: CGSize { window.deviceType.portraitSize }
     /// The device's own footprint, swapped for landscape — a clean 90°
     /// swap has an exact, simple bounding box (unlike a partial rotation
-    /// angle, whose bounding box changes continuously), so this stays
-    /// exact regardless of orientation.
+    /// angle, whose bounding box changes continuously).
     private var orientedNativeSize: CGSize {
         window.orientation == .landscape
             ? CGSize(width: nativeSize.height, height: nativeSize.width)
             : nativeSize
     }
-    /// The bezel's own on-screen size — this is the ONLY place scaling
-    /// happens (based on the COMMITTED scale, not the live pinch value —
-    /// see deviceBezel), so it's self-consistent by construction.
+    /// The bezel's own on-screen size — always based on the COMMITTED
+    /// scale (never a live/in-progress gesture value), so it's always
+    /// self-consistent with what's actually rendered.
     private var scaledBezelSize: CGSize {
         CGSize(
             width: orientedNativeSize.width * window.displayScale,
             height: orientedNativeSize.height * window.displayScale)
-    }
-    /// True total on-screen footprint of the whole window (title bar +
-    /// button row + bezel + size controls + spacing) — used for the
-    /// background panel and to keep the window on-screen. Computed once,
-    /// directly, so it can never mismatch the actual rendered content.
-    private var totalWindowSize: CGSize {
-        let height = Self.rowHeight * 3 + 18 + scaledBezelSize.height  // 3 rows + 3×6pt spacing
-        return CGSize(width: max(Self.barWidth, scaledBezelSize.width) + 16, height: height + 16)
     }
 
     var body: some View {
@@ -143,9 +180,24 @@ struct SimulatorDeviceFrameView: View {
         }
     }
 
-    // MARK: Title bar — the ONLY draggable area in this whole view, and
-    // nothing else lives inside it, so there is no button for a drag to
-    // ever compete with.
+    /// Shared single-finger drag-to-move, used by both the title bar and
+    /// the bezel itself. Updates a plain local @State during the drag
+    /// (cheap — only this view re-renders); window.position (the
+    /// @Published property the whole window observes) is only touched
+    /// ONCE, at the end.
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 4)
+            .onChanged { value in
+                liveDragOffset = value.translation
+            }
+            .onEnded { value in
+                window.position.x += value.translation.width
+                window.position.y += value.translation.height
+                liveDragOffset = .zero
+            }
+    }
+
+    // MARK: Title bar
     private var titleBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal")
@@ -162,21 +214,8 @@ struct SimulatorDeviceFrameView: View {
         .background(Color.black.opacity(0.88))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
-        .gesture(
-            // Updates a plain local @State during the drag (cheap — only
-            // this one small view re-renders). window.position (the
-            // @Published property the whole window observes) is only
-            // touched ONCE, at the end.
-            DragGesture(minimumDistance: 4)
-                .onChanged { value in
-                    liveDragOffset = value.translation
-                }
-                .onEnded { value in
-                    window.position.x += value.translation.width
-                    window.position.y += value.translation.height
-                    liveDragOffset = .zero
-                }
-        )
+        .zIndex(2)
+        .gesture(moveGesture)
     }
 
     // MARK: Button row — plain taps only, no gesture attached to this
@@ -194,6 +233,7 @@ struct SimulatorDeviceFrameView: View {
         .frame(width: max(Self.barWidth, scaledBezelSize.width), height: Self.rowHeight)
         .background(Color.black.opacity(0.75))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .zIndex(2)
     }
 
     private func simulatorButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
@@ -209,46 +249,72 @@ struct SimulatorDeviceFrameView: View {
 
     // MARK: Device bezel — the real frame image, with a web view built at
     // the device's true native size padded to sit inside the frame's
-    // transparent screen area. Scaling/rotation is entirely self-contained
-    // here: each `.frame()` exactly matches what was just transformed, so
-    // there is no other content mixed into this calculation.
+    // transparent screen area.
     //
-    // Two-finger gestures live here: pinch resizes (live preview via
-    // @GestureState, committed to window.displayScale on release); a
-    // two-finger twist past ~30° snaps portrait/landscape (a discrete
-    // snap, not free rotation — a clean 90° swap has an exact, simple
-    // bounding box, whereas a partial angle's bounding box changes
-    // continuously and would reintroduce the earlier size-mismatch bug).
+    // The web view's own visual scale/rotation is handled entirely
+    // inside `SimulatorWebView` via `UIView.transform` (see its doc
+    // comment) — NOT here. Only the non-interactive frame IMAGE uses
+    // SwiftUI's `.scaleEffect`/`.rotationEffect`, which is perfectly safe
+    // since a plain `Image` has no touch handling of its own to conflict
+    // with.
+    //
+    // Two-finger gestures: pinch resizes, a two-finger twist past ~30°
+    // snaps portrait/landscape — both commit-only (no live preview during
+    // the gesture), combined with the single-finger move-drag via
+    // `SimultaneousGesture` (different touch counts, so they never
+    // conflict with each other).
     private var deviceBezel: some View {
         let insets = window.deviceType.screenInsets
-        let leftPad = nativeSize.width * insets.left
-        let rightPad = nativeSize.width * insets.right
-        let topPad = nativeSize.height * insets.top
-        let bottomPad = nativeSize.height * insets.bottom
+        let portraitTopPad = nativeSize.height * insets.top
+        let portraitRightPad = nativeSize.width * insets.right
+        let portraitBottomPad = nativeSize.height * insets.bottom
+        let portraitLeftPad = nativeSize.width * insets.left
 
-        let bezelContent = ZStack {
+        // The frame image rotates 90° for landscape, so its screen hole
+        // rotates with it: what was the top edge becomes the right edge,
+        // and so on around — these are NOT just portrait/landscape
+        // swapped, they're rotated.
+        let topPad: CGFloat
+        let rightPad: CGFloat
+        let bottomPad: CGFloat
+        let leftPad: CGFloat
+        if window.orientation == .landscape {
+            topPad = portraitLeftPad
+            rightPad = portraitTopPad
+            bottomPad = portraitRightPad
+            leftPad = portraitBottomPad
+        } else {
+            topPad = portraitTopPad
+            rightPad = portraitRightPad
+            bottomPad = portraitBottomPad
+            leftPad = portraitLeftPad
+        }
+
+        return ZStack {
             SimulatorWebView(window: window)
-                .frame(width: nativeSize.width, height: nativeSize.height)
-                .padding(EdgeInsets(top: topPad, leading: leftPad, bottom: bottomPad, trailing: rightPad))
-                .clipShape(RoundedRectangle(cornerRadius: nativeSize.width * 0.05))
+                .padding(
+                    EdgeInsets(
+                        top: topPad * window.displayScale, leading: leftPad * window.displayScale,
+                        bottom: bottomPad * window.displayScale, trailing: rightPad * window.displayScale)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: scaledBezelSize.width * 0.05))
 
             Image(window.deviceType.frameImageName)
                 .resizable()
+                .frame(width: nativeSize.width, height: nativeSize.height)
+                .rotationEffect(.degrees(window.orientation == .landscape ? 90 : 0))
+                .frame(width: orientedNativeSize.width, height: orientedNativeSize.height)
+                .scaleEffect(window.displayScale)
+                .frame(width: scaledBezelSize.width, height: scaledBezelSize.height)
         }
-        .frame(width: nativeSize.width, height: nativeSize.height)
-
-        let isLandscape = window.orientation == .landscape
-        let liveScale = window.displayScale * liveMagnification
-
-        return bezelContent
-            .rotationEffect(.degrees(isLandscape ? 90 : 0))
-            .frame(width: orientedNativeSize.width, height: orientedNativeSize.height)
-            .scaleEffect(liveScale)
-            .frame(width: orientedNativeSize.width * liveScale, height: orientedNativeSize.height * liveScale)
-            .gesture(
+        .frame(width: scaledBezelSize.width, height: scaledBezelSize.height)
+        .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+        .zIndex(1)
+        .gesture(
+            SimultaneousGesture(
+                moveGesture,
                 SimultaneousGesture(
                     MagnificationGesture()
-                        .updating($liveMagnification) { value, state, _ in state = value }
                         .onEnded { value in
                             window.displayScale = min(max(window.displayScale * value, Self.minScale), Self.maxScale)
                         },
@@ -260,6 +326,7 @@ struct SimulatorDeviceFrameView: View {
                         }
                 )
             )
+        )
     }
 
     // MARK: Size controls — plain +/- buttons, no drag handle.
@@ -280,6 +347,7 @@ struct SimulatorDeviceFrameView: View {
         .frame(width: max(Self.barWidth, scaledBezelSize.width), height: Self.rowHeight)
         .background(Color.black.opacity(0.75))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .zIndex(2)
     }
 }
 
