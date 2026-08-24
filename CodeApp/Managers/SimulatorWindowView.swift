@@ -555,205 +555,93 @@ struct SimulatorDeviceFrameView: View {
     }
 
     // MARK: - Size Controls
+// MARK: - Size Controls
 
-    private var sizeControls: some View {
+private var sizeControls: some View {
 
-        HStack(spacing: 16) {
+    HStack(spacing: 16) {
 
-            simulatorButton(
-                "minus.magnifyingglass"
+        simulatorButton(
+            "minus.magnifyingglass"
+        ) {
+
+            withAnimation(
+                .easeOut(duration: 0.12)
             ) {
 
-                withAnimation(
-                    .easeOut(duration: 0.12)
-                ) {
-
-                    window.displayScale =
-                        max(
-                            Self.minScale,
-                            window.displayScale -
-                                Self.resizeStep
-                        )
-                }
-            }
-
-            Text(
-                "\(Int(window.displayScale * 100))%"
-            )
-            .font(
-                .system(
-                    size: 11,
-                    weight: .medium
-                )
-            )
-            .foregroundColor(
-                .white.opacity(0.8)
-            )
-            .frame(
-                minWidth: 40
-            )
-
-            simulatorButton(
-                "plus.magnifyingglass"
-            ) {
-
-                withAnimation(
-                    .easeOut(duration: 0.12
-                ) {
-
-                    window.displayScale =
-                        min(
-                            Self.maxScale,
-                            window.displayScale +
-                                Self.resizeStep
-                        )
-                }
-            }
-
-            // RESET TO DEFAULT FRAME SIZE
-            simulatorButton(
-                "1.circle"
-            ) {
-
-                withAnimation(
-                    .easeOut(duration: 0.12)
-                ) {
-
-                    window.displayScale =
-                        Self.defaultScale
-                }
+                window.displayScale =
+                    max(
+                        Self.minScale,
+                        window.displayScale -
+                            Self.resizeStep
+                    )
             }
         }
-        .padding(.horizontal, 10)
+
+        Text(
+            "\(Int(window.displayScale * 100))%"
+        )
+        .font(
+            .system(
+                size: 11,
+                weight: .medium
+            )
+        )
+        .foregroundColor(
+            .white.opacity(0.8)
+        )
         .frame(
-            width:
-                max(
-                    Self.barWidth,
-                    scaledBezelSize.width
-                ),
-            height: Self.rowHeight
+            minWidth: 40
         )
-        .background(
-            Color.black.opacity(0.78)
-        )
-        .clipShape(
-            RoundedRectangle(
-                cornerRadius: 8
-            )
-        )
-    }
-}
 
-// MARK: - Settings
+        simulatorButton(
+            "plus.magnifyingglass"
+        ) {
 
-private struct SimulatorSettingsView: View {
-
-    let deviceType: SimulatorDeviceType
-
-    @EnvironmentObject
-    private var simulatorManager: SimulatorManager
-
-    @Environment(\.dismiss)
-    private var dismiss
-
-    @State private var urlText = ""
-
-    var body: some View {
-
-        NavigationView {
-
-            VStack(
-                alignment: .leading,
-                spacing: 14
+            withAnimation(
+                .easeOut(duration: 0.12)
             ) {
 
-                Text(
-                    "\(deviceType.displayName) URL"
-                )
-                .font(.headline)
-
-                TextField(
-                    "https://example.com",
-                    text: $urlText
-                )
-                .textFieldStyle(
-                    .roundedBorder
-                )
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-                .keyboardType(.URL)
-
-                Text(
-                    "The URL is saved and restored when the simulator is opened again."
-                )
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-                Button(
-                    "Save & Reload"
-                ) {
-
-                    guard
-                        let url =
-                            URL(
-                                string: urlText
-                            ),
-                        url.scheme != nil
-                    else {
-                        return
-                    }
-
-                    simulatorManager.saveURL(
-                        url,
-                        for: deviceType
+                window.displayScale =
+                    min(
+                        Self.maxScale,
+                        window.displayScale +
+                            Self.resizeStep
                     )
-
-                    dismiss()
-                }
-                .buttonStyle(
-                    .borderedProminent
-                )
-                .disabled(
-                    URL(
-                        string: urlText
-                    )?.scheme == nil
-                )
-
-                Spacer()
-            }
-            .padding()
-            .navigationTitle(
-                "Simulator Settings"
-            )
-            .navigationBarTitleDisplayMode(
-                .inline
-            )
-            .toolbar {
-
-                ToolbarItem(
-                    placement:
-                        .navigationBarTrailing
-                ) {
-
-                    Button("Close") {
-                        dismiss()
-                    }
-                }
             }
         }
-        .onAppear {
 
-            urlText =
-                simulatorManager
-                    .urlDrafts[deviceType]
-                ??
-                simulatorManager
-                    .savedURL(
-                        for: deviceType
-                    )
-                    .absoluteString
+        // RESET TO DEFAULT FRAME SIZE
+        simulatorButton(
+            "1.circle"
+        ) {
+
+            withAnimation(
+                .easeOut(duration: 0.12)
+            ) {
+
+                window.displayScale =
+                    Self.defaultScale
+            }
         }
     }
+    .padding(.horizontal, 10)
+    .frame(
+        width:
+            max(
+                Self.barWidth,
+                scaledBezelSize.width
+            ),
+        height: Self.rowHeight
+    )
+    .background(
+        Color.black.opacity(0.78)
+    )
+    .clipShape(
+        RoundedRectangle(
+            cornerRadius: 8
+        )
+    )
 }
 
 // MARK: - Minimized Simulator
