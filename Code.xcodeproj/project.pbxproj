@@ -7,13 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		08A2771C76103AB0A550D94B /* IPhone13FrameTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2318512DA3AF707F38DB79D4 /* IPhone13FrameTest.swift */; };
-		1E5BE68D9A3CE0672C4CC39A /* IPhone13WebViewTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF55BF3846C8E3D1B4B2FD28 /* IPhone13WebViewTest.swift */; };
 		354DA3C8156EB3342C6CE8D5 /* DartHybridIntelliSense.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A2A85E8BD084D5BB0303F35 /* DartHybridIntelliSense.swift */; };
 		569080974B7EFA0742190FC4 /* RemoteExecutionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 048952C807CB0CD82DE86971 /* RemoteExecutionManager.swift */; };
 		769E18CEAA4AB5AFEAB7725D /* SimulatorManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFE4A1FE6755F9869CCB7011 /* SimulatorManager.swift */; };
 		778E5104343E2BB04B166DF9 /* RemoteRunExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */; };
-		7EE168B2C7EE0D6E1290E00D /* IPhone13SimulatorButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = EADA2498A348ACB44EB90EB2 /* IPhone13SimulatorButton.swift */; };
 		890422CE574C82369F6BF61A /* SimulatorExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D30C47058822E81B9DFB75E /* SimulatorExtension.swift */; };
 		940C68252C646E0400089EA3 /* System.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940C68242C646E0400089EA3 /* System.swift */; };
 		940C68262C64704C00089EA3 /* String+toCString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 949B3CC425DEA89A00BC83B5 /* String+toCString.swift */; };
@@ -536,9 +533,6 @@
 		9FE3E2AC298A169B00F63DD0 /* SwiftGit2 in Frameworks */ = {isa = PBXBuildFile; productRef = 9FE3E2AB298A169A00F63DD0 /* SwiftGit2 */; };
 		9FE3E2AD298A16A300F63DD0 /* NMSSH.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 942E321128093CA600233441 /* NMSSH.xcframework */; };
 		A2B57D2E74A8348AE903D96E /* SimulatorWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69404B7EF47F4AA2B54BEB37 /* SimulatorWindowView.swift */; };
-		AC7FBC8E44A90BA0813EBD40 /* IPhone13TestScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49EB482B587F228D42C7A1A2 /* IPhone13TestScreen.swift */; };
-		FAF8F6B0357C734CFB09CA9B /* IPhone13FrameTestPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77972F82DC6B6D2F81AAE027 /* IPhone13FrameTestPreview.swift */; };
-		FC6B0E8433E6D19555897FC5 /* IPhone13StandalonePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FC68ECF41D2889BB44DFF70 /* IPhone13StandalonePreview.swift */; };
 		FFD081B82925F8FB001D9373 /* TextEditorWithPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD081B72925F8FB001D9373 /* TextEditorWithPlaceholder.swift */; };
 		FFD081B92925F8FB001D9373 /* TextEditorWithPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD081B72925F8FB001D9373 /* TextEditorWithPlaceholder.swift */; };
 		FFD081BB29260B00001D9373 /* Libgit2Error.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD081BA29260B00001D9373 /* Libgit2Error.swift */; };
@@ -2429,12 +2423,6 @@
 				769E18CEAA4AB5AFEAB7725D /* SimulatorManager.swift in Sources */,
 				A2B57D2E74A8348AE903D96E /* SimulatorWindowView.swift in Sources */,
 				890422CE574C82369F6BF61A /* SimulatorExtension.swift in Sources */,
-				08A2771C76103AB0A550D94B /* IPhone13FrameTest.swift in Sources */,
-				FAF8F6B0357C734CFB09CA9B /* IPhone13FrameTestPreview.swift in Sources */,
-				7EE168B2C7EE0D6E1290E00D /* IPhone13SimulatorButton.swift in Sources */,
-				AC7FBC8E44A90BA0813EBD40 /* IPhone13TestScreen.swift in Sources */,
-				1E5BE68D9A3CE0672C4CC39A /* IPhone13WebViewTest.swift in Sources */,
-				FC6B0E8433E6D19555897FC5 /* IPhone13StandalonePreview.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
