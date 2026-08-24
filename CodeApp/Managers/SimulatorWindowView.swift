@@ -92,7 +92,9 @@ private struct SimulatorWebView: UIViewRepresentable {
         weak var webView: WKWebView?
         var lastURL: URL?
         var lastReloadToken: UUID?
-        private var lastAppliedKey: String?
+        private var lastScale: CGFloat?
+        private var lastOrientation: SimulatorOrientation?
+        private var hasLaidOutWithValidBounds = false
 
         /// The web view's own `.bounds` are swapped for landscape — a
         /// real width/height swap, giving the page a genuinely
@@ -102,17 +104,31 @@ private struct SimulatorWebView: UIViewRepresentable {
         /// handles orientation. `.bounds`/`.center` are used instead of
         /// `.frame`, since UIKit's own docs say `.frame` is undefined
         /// once `.transform` isn't the identity transform.
+        ///
+        /// IMPORTANT: this guard deliberately does NOT compare
+        /// `containerBounds` numerically. An earlier version did, to catch
+        /// the container going from zero size to its real size on first
+        /// layout — but comparing floating-point sizes across many rapid
+        /// re-renders (e.g. every frame of a drag) is exactly the kind of
+        /// comparison that can be defeated by sub-pixel jitter, causing
+        /// the transform to be reset far more often than intended.
+        /// Resetting a WKWebView's transform/bounds at that frequency is a
+        /// very plausible cause of the freeze (and the touch/visual
+        /// issues) reported after the previous change. Container size is
+        /// already fully determined by `window.displayScale` (that's what
+        /// computes it), so scale + orientation alone are sufficient,
+        /// plus a one-time flag for the initial zero→real bounds
+        /// transition.
         func applyLayout(window: SimulatorWindowState, containerBounds: CGRect) {
             guard let webView = webView, containerBounds.width > 0, containerBounds.height > 0 else {
                 return
             }
-            // Cheap guard against redundant identical work within the same
-            // layout pass, WITHOUT skipping genuine bounds changes (unlike
-            // the old scale/orientation-only check).
-            let key =
-                "\(window.displayScale)|\(window.orientation)|\(containerBounds.width)|\(containerBounds.height)"
-            guard key != lastAppliedKey else { return }
-            lastAppliedKey = key
+            let scaleOrOrientationChanged =
+                lastScale != window.displayScale || lastOrientation != window.orientation
+            guard scaleOrOrientationChanged || !hasLaidOutWithValidBounds else { return }
+            lastScale = window.displayScale
+            lastOrientation = window.orientation
+            hasLaidOutWithValidBounds = true
 
             let nativeSize = window.deviceType.portraitSize
             let orientedSize =

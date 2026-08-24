@@ -95,7 +95,7 @@ final class SimulatorWindowState: ObservableObject, Identifiable {
     /// never trigger an unwanted reload.
     @Published var reloadToken = UUID()
 
-    init(deviceType: SimulatorDeviceType, url: URL, position: CGPoint, displayScale: CGFloat = 0.45) {
+    init(deviceType: SimulatorDeviceType, url: URL, position: CGPoint, displayScale: CGFloat = 1.0) {
         self.id = UUID()
         self.deviceType = deviceType
         self.url = url
