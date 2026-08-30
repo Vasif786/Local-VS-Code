@@ -6,6 +6,8 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Device
+
 enum SimulatorDeviceType: String, CaseIterable, Identifiable {
     case iPhone14Pro
     case iPadPro
@@ -15,7 +17,7 @@ enum SimulatorDeviceType: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .iPhone14Pro: return "iPhone 14 Pro"
-        case .iPadPro: return "iPad Pro"
+        case .iPadPro: return "iPad (5th generation)"
         }
     }
 
@@ -33,30 +35,39 @@ enum SimulatorDeviceType: String, CaseIterable, Identifiable {
         }
     }
 
-    // CSS/layout viewport used by the simulator.
+    /// Real CSS/logical viewport used by the device.
+    /// This stays FIXED while the on-screen simulator is zoomed.
     var viewportSize: CGSize {
         switch self {
-        case .iPhone14Pro: return CGSize(width: 393, height: 852)
-        case .iPadPro: return CGSize(width: 1024, height: 1366)
+        case .iPhone14Pro:
+            return CGSize(width: 393, height: 852)
+        case .iPadPro:
+            // iPad 5th generation Safari viewport in portrait points.
+            return CGSize(width: 768, height: 1024)
         }
     }
 
-    // Aspect ratio of the device-frame PNG.
-    // iPhone value matches the supplied 1311 x 2672 frame.
+    /// The supplied frame image's aspect ratio.
+    /// iPad uses the normal iPad portrait ratio as a fallback if its asset
+    /// has a different physical resolution; the screen is still fitted to
+    /// the same viewport aspect ratio.
     var frameAspectRatio: CGFloat {
         switch self {
-        case .iPhone14Pro: return 1311.0 / 2672.0
-        case .iPadPro: return 2048.0 / 2732.0
+        case .iPhone14Pro:
+            return 1311.0 / 2672.0
+        case .iPadPro:
+            return 768.0 / 1024.0
         }
     }
 
-    // Screen-hole inset as a fraction of the frame image.
-    // These values are for the supplied frame assets.
+    /// Screen-hole inset in the frame image.
+    /// These are fractions of the portrait frame dimensions.
     var screenInsets: (left: CGFloat, right: CGFloat, top: CGFloat, bottom: CGFloat) {
         switch self {
         case .iPhone14Pro:
             return (0.0519, 0.0496, 0.0217, 0.0221)
         case .iPadPro:
+            // Matches the existing SimulatorFrameiPad asset used by CodeApp.
             return (0.073, 0.090, 0.091, 0.108)
         }
     }
@@ -71,21 +82,7 @@ enum SimulatorOrientation: String, CaseIterable {
     }
 }
 
-enum SimulatorPositionPreset: String, CaseIterable, Identifiable {
-    case topLeft, topRight, center, bottomLeft, bottomRight
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .topLeft: return "Top Left"
-        case .topRight: return "Top Right"
-        case .center: return "Center"
-        case .bottomLeft: return "Bottom Left"
-        case .bottomRight: return "Bottom Right"
-        }
-    }
-}
+// MARK: - Window state
 
 final class SimulatorWindowState: ObservableObject, Identifiable {
     let id = UUID()
@@ -95,7 +92,7 @@ final class SimulatorWindowState: ObservableObject, Identifiable {
     @Published var orientation: SimulatorOrientation = .portrait
     @Published var position: CGPoint
     @Published var displayScale: CGFloat
-    @Published var isMinimized = false
+    @Published var isMoveMode = false
     @Published var reloadToken = UUID()
 
     init(
@@ -111,8 +108,11 @@ final class SimulatorWindowState: ObservableObject, Identifiable {
     }
 }
 
+// MARK: - Manager
+
 final class SimulatorManager: ObservableObject {
     static let shared = SimulatorManager()
+
     private init() {
         for type in SimulatorDeviceType.allCases {
             urlDrafts[type] = savedURL(for: type).absoluteString
@@ -150,95 +150,78 @@ final class SimulatorManager: ObservableObject {
 
     func open(deviceType: SimulatorDeviceType) {
         if let existing = windows.first(where: { $0.deviceType == deviceType }) {
-            existing.isMinimized = false
+            existing.isMoveMode = false
             return
         }
 
         let offset = CGFloat(windows.count * 24)
-        let window = SimulatorWindowState(
-            deviceType: deviceType,
-            url: savedURL(for: deviceType),
-            position: CGPoint(x: 30 + offset, y: 50 + offset)
+        windows.append(
+            SimulatorWindowState(
+                deviceType: deviceType,
+                url: savedURL(for: deviceType),
+                position: CGPoint(x: 30 + offset, y: 50 + offset)
+            )
         )
-        windows.append(window)
     }
 
     func close(_ window: SimulatorWindowState) {
         windows.removeAll { $0.id == window.id }
     }
-
-    func setPosition(_ preset: SimulatorPositionPreset, for window: SimulatorWindowState, in size: CGSize) {
-        let frame = SimulatorLayout.frameSize(for: window)
-        let margin: CGFloat = 24
-
-        let x: CGFloat
-        let y: CGFloat
-
-        switch preset {
-        case .topLeft:
-            x = margin
-            y = margin
-        case .topRight:
-            x = max(margin, size.width - frame.width - margin)
-            y = margin
-        case .center:
-            x = max(margin, (size.width - frame.width) / 2)
-            y = max(margin, (size.height - frame.height) / 2)
-        case .bottomLeft:
-            x = margin
-            y = max(margin, size.height - frame.height - margin)
-        case .bottomRight:
-            x = max(margin, size.width - frame.width - margin)
-            y = max(margin, size.height - frame.height - margin)
-        }
-
-        window.position = CGPoint(x: x, y: y)
-    }
 }
 
-enum SimulatorLayout {
-    static func orientedViewport(_ window: SimulatorWindowState) -> CGSize {
-        let size = window.deviceType.viewportSize
-        if window.orientation == .landscape {
-            return CGSize(width: size.height, height: size.width)
-        }
-        return size
-    }
+// MARK: - Layout
 
-    static func frameSize(for window: SimulatorWindowState) -> CGSize {
-        let viewport = orientedViewport(window)
-        let aspect = window.deviceType.frameAspectRatio
+/// All calculations are based on the PORTRAIT device. Landscape is produced
+/// by rotating the complete device container. This avoids the old landscape
+/// bug where the WebView and frame were using different coordinate systems.
+enum SimulatorLayout {
+    static func portraitFrameSize(for window: SimulatorWindowState) -> CGSize {
+        let viewport = window.deviceType.viewportSize
+        let frameAspect = window.deviceType.frameAspectRatio
+
+        // The frame is scaled from the real viewport height. The viewport
+        // itself remains logically fixed; only the visual device changes.
         let height = viewport.height * window.displayScale
-        let width = height * aspect
+        let width = height * frameAspect
         return CGSize(width: width, height: height)
     }
 
-    static func screenRect(for window: SimulatorWindowState) -> CGRect {
-        let frame = frameSize(for: window)
-        let insets = window.deviceType.screenInsets
-
-        let portraitInsets = (
-            left: frame.width * insets.left,
-            right: frame.width * insets.right,
-            top: frame.height * insets.top,
-            bottom: frame.height * insets.bottom
-        )
-
+    static func frameSize(for window: SimulatorWindowState) -> CGSize {
+        let portrait = portraitFrameSize(for: window)
         if window.orientation == .portrait {
-            return CGRect(
-                x: portraitInsets.left,
-                y: portraitInsets.top,
-                width: max(1, frame.width - portraitInsets.left - portraitInsets.right),
-                height: max(1, frame.height - portraitInsets.top - portraitInsets.bottom)
-            )
+            return portrait
+        }
+        return CGSize(width: portrait.height, height: portrait.width)
+    }
+
+    /// Screen hole in the portrait frame coordinate space.
+    static func portraitScreenRect(for window: SimulatorWindowState) -> CGRect {
+        let frame = portraitFrameSize(for: window)
+        let inset = window.deviceType.screenInsets
+
+        return CGRect(
+            x: frame.width * inset.left,
+            y: frame.height * inset.top,
+            width: max(1, frame.width * (1 - inset.left - inset.right)),
+            height: max(1, frame.height * (1 - inset.top - inset.bottom))
+        )
+    }
+
+    /// Screen hole in the currently displayed orientation.
+    static func screenRect(for window: SimulatorWindowState) -> CGRect {
+        let portrait = portraitScreenRect(for: window)
+
+        guard window.orientation == .landscape else {
+            return portrait
         }
 
-        // The frame rotates -90 degrees. Remap the hole accordingly.
+        // The whole portrait simulator rotates -90°. Convert the portrait
+        // hole to the new landscape coordinate system.
         return CGRect(
-            x: portraitInsets.top,
-            y: portraitInsets.right,
-            width: max(1, frame.width - portraitInsets.top - portraitInsets.bottom),
-            height: max(1, frame.height - portraitInsets.right - portraitInsets.left)
+            x: portrait.minY,
+            y: portraitFrameSize(for: window).width - portrait.maxX,
+            width: portrait.height,
+            height: portrait.width
         )
     }
 }
