@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftUI
+import UIKit
 
 // MARK: - Device
 
@@ -35,40 +36,13 @@ enum SimulatorDeviceType: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Real CSS/logical viewport used by the device.
-    /// This stays FIXED while the on-screen simulator is zoomed.
+    /// CSS/logical viewport of the real device. This is NOT used as the
+    /// visual frame size. The WebView keeps these bounds and is transformed
+    /// only for display, so zooming the simulator doesn't change the page UI.
     var viewportSize: CGSize {
         switch self {
-        case .iPhone14Pro:
-            return CGSize(width: 393, height: 852)
-        case .iPadPro:
-            // iPad 5th generation Safari viewport in portrait points.
-            return CGSize(width: 768, height: 1024)
-        }
-    }
-
-    /// The supplied frame image's aspect ratio.
-    /// iPad uses the normal iPad portrait ratio as a fallback if its asset
-    /// has a different physical resolution; the screen is still fitted to
-    /// the same viewport aspect ratio.
-    var frameAspectRatio: CGFloat {
-        switch self {
-        case .iPhone14Pro:
-            return 1311.0 / 2672.0
-        case .iPadPro:
-            return 768.0 / 1024.0
-        }
-    }
-
-    /// Screen-hole inset in the frame image.
-    /// These are fractions of the portrait frame dimensions.
-    var screenInsets: (left: CGFloat, right: CGFloat, top: CGFloat, bottom: CGFloat) {
-        switch self {
-        case .iPhone14Pro:
-            return (0.0519, 0.0496, 0.0217, 0.0221)
-        case .iPadPro:
-            // Matches the existing SimulatorFrameiPad asset used by CodeApp.
-            return (0.073, 0.090, 0.091, 0.108)
+        case .iPhone14Pro: return CGSize(width: 393, height: 852)
+        case .iPadPro: return CGSize(width: 768, height: 1024)
         }
     }
 }
@@ -99,7 +73,7 @@ final class SimulatorWindowState: ObservableObject, Identifiable {
         deviceType: SimulatorDeviceType,
         url: URL,
         position: CGPoint,
-        displayScale: CGFloat = 0.70
+        displayScale: CGFloat = 0.62
     ) {
         self.deviceType = deviceType
         self.url = url
@@ -171,57 +145,207 @@ final class SimulatorManager: ObservableObject {
 
 // MARK: - Layout
 
-/// All calculations are based on the PORTRAIT device. Landscape is produced
-/// by rotating the complete device container. This avoids the old landscape
-/// bug where the WebView and frame were using different coordinate systems.
+/// Layout deliberately uses the actual frame asset rather than guessing its
+/// aspect ratio. The transparent area around the screen is detected from the
+/// asset at runtime, which makes the WebView line up with the supplied frame.
 enum SimulatorLayout {
-    static func portraitFrameSize(for window: SimulatorWindowState) -> CGSize {
-        let viewport = window.deviceType.viewportSize
-        let frameAspect = window.deviceType.frameAspectRatio
+    struct FrameInfo {
+        let size: CGSize
+        let screenRect: CGRect
+    }
 
-        // The frame is scaled from the real viewport height. The viewport
-        // itself remains logically fixed; only the visual device changes.
-        let height = viewport.height * window.displayScale
-        let width = height * frameAspect
-        return CGSize(width: width, height: height)
+    static func frameInfo(for type: SimulatorDeviceType) -> FrameInfo {
+        guard let image = UIImage(named: type.frameImageName),
+              let cgImage = image.cgImage else {
+            return fallbackInfo(for: type)
+        }
+
+        let width = CGFloat(cgImage.width)
+        let height = CGFloat(cgImage.height)
+        let screen = transparentScreenRect(cgImage: cgImage)
+
+        // UIImage may carry a scale. The normalized rect is what matters,
+        // while the final visual size is chosen below.
+        let normalized = CGRect(
+            x: screen.minX / width,
+            y: screen.minY / height,
+            width: screen.width / width,
+            height: screen.height / height
+        )
+
+        let baseHeight: CGFloat = type == .iPhone14Pro ? 620 : 620
+        let visualHeight = baseHeight
+        let visualWidth = visualHeight * (width / height)
+        let visualScreen = CGRect(
+            x: visualWidth * normalized.minX,
+            y: visualHeight * normalized.minY,
+            width: visualWidth * normalized.width,
+            height: visualHeight * normalized.height
+        )
+
+        return FrameInfo(
+            size: CGSize(width: visualWidth, height: visualHeight),
+            screenRect: visualScreen
+        )
+    }
+
+    static func portraitFrameSize(for window: SimulatorWindowState) -> CGSize {
+        let base = frameInfo(for: window.deviceType).size
+        return CGSize(width: base.width * window.displayScale,
+                      height: base.height * window.displayScale)
     }
 
     static func frameSize(for window: SimulatorWindowState) -> CGSize {
         let portrait = portraitFrameSize(for: window)
-        if window.orientation == .portrait {
-            return portrait
-        }
-        return CGSize(width: portrait.height, height: portrait.width)
+        return window.orientation == .portrait
+            ? portrait
+            : CGSize(width: portrait.height, height: portrait.width)
     }
 
-    /// Screen hole in the portrait frame coordinate space.
     static func portraitScreenRect(for window: SimulatorWindowState) -> CGRect {
-        let frame = portraitFrameSize(for: window)
-        let inset = window.deviceType.screenInsets
-
+        let base = frameInfo(for: window.deviceType)
+        let scale = window.displayScale
         return CGRect(
-            x: frame.width * inset.left,
-            y: frame.height * inset.top,
-            width: max(1, frame.width * (1 - inset.left - inset.right)),
-            height: max(1, frame.height * (1 - inset.top - inset.bottom))
+            x: base.screenRect.minX * scale,
+            y: base.screenRect.minY * scale,
+            width: base.screenRect.width * scale,
+            height: base.screenRect.height * scale
         )
     }
 
-    /// Screen hole in the currently displayed orientation.
     static func screenRect(for window: SimulatorWindowState) -> CGRect {
-        let portrait = portraitScreenRect(for: window)
+        let p = portraitScreenRect(for: window)
+        guard window.orientation == .landscape else { return p }
 
-        guard window.orientation == .landscape else {
-            return portrait
+        let portrait = portraitFrameSize(for: window)
+        // Coordinate conversion for a -90° rotated portrait frame.
+        return CGRect(
+            x: p.minY,
+            y: portrait.width - p.maxX,
+            width: p.height,
+            height: p.width
+        )
+    }
+
+    private static func fallbackInfo(for type: SimulatorDeviceType) -> FrameInfo {
+        let height: CGFloat = 620
+        let aspect = type == .iPhone14Pro ? (1311.0 / 2672.0) : (768.0 / 1024.0)
+        let width = height * aspect
+        let inset = type == .iPhone14Pro
+            ? (0.052, 0.050, 0.022, 0.022)
+            : (0.073, 0.090, 0.091, 0.108)
+        return FrameInfo(
+            size: CGSize(width: width, height: height),
+            screenRect: CGRect(
+                x: width * inset.0,
+                y: height * inset.2,
+                width: width * (1 - inset.0 - inset.1),
+                height: height * (1 - inset.2 - inset.3)
+            )
+        )
+    }
+
+    /// Finds the transparent connected component containing the image centre.
+    /// Device frame assets normally leave the screen itself transparent, while
+    /// the bezel remains opaque. This avoids hard-coded pixel offsets.
+    private static func transparentScreenRect(cgImage: CGImage) -> CGRect {
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var data = [UInt8](repeating: 0, count: height * bytesPerRow)
+
+        guard let context = CGContext(
+            data: &data,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return CGRect(x: 0, y: 0, width: width, height: height)
         }
 
-        // The whole portrait simulator rotates -90°. Convert the portrait
-        // hole to the new landscape coordinate system.
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        let sx = min(width - 1, max(0, width / 2))
+        let sy = min(height - 1, max(0, height / 2))
+        let start = sy * bytesPerRow + sx * bytesPerPixel
+        let startAlpha = data[start + 3]
+
+        // If centre isn't transparent, use the alpha-0 component nearest the
+        // centre by scanning a small grid first, then fall back to full image.
+        var seedX = sx
+        var seedY = sy
+        if startAlpha > 8 {
+            var found = false
+            for radius in stride(from: 1, through: min(width, height) / 3, by: 2) where !found {
+                let candidates = [
+                    (sx, max(0, sy - radius)),
+                    (sx, min(height - 1, sy + radius)),
+                    (max(0, sx - radius), sy),
+                    (min(width - 1, sx + radius), sy)
+                ]
+                for (x, y) in candidates {
+                    if data[y * bytesPerRow + x * bytesPerPixel + 3] <= 8 {
+                        seedX = x; seedY = y; found = true; break
+                    }
+                }
+            }
+            if !found {
+                return CGRect(x: 0, y: 0, width: width, height: height)
+            }
+        }
+
+        // Flood fill can be expensive for a huge asset, so sample at most
+        // 1/2 resolution. This is more than enough for a frame inset.
+        let step = max(1, Int(max(width, height) / 900))
+        let sw = (width + step - 1) / step
+        let sh = (height + step - 1) / step
+        var visited = [UInt8](repeating: 0, count: sw * sh)
+        func alphaAt(_ x: Int, _ y: Int) -> UInt8 {
+            data[y * bytesPerRow + x * bytesPerPixel + 3]
+        }
+        func transparent(_ x: Int, _ y: Int) -> Bool {
+            alphaAt(min(width - 1, x * step), min(height - 1, y * step)) <= 8
+        }
+
+        let qx = min(sw - 1, max(0, seedX / step))
+        let qy = min(sh - 1, max(0, seedY / step))
+        guard transparent(qx, qy) else {
+            return CGRect(x: 0, y: 0, width: width, height: height)
+        }
+
+        var queueX = [Int](); queueX.reserveCapacity(sw * sh / 2)
+        var queueY = [Int](); queueY.reserveCapacity(sw * sh / 2)
+        queueX.append(qx); queueY.append(qy)
+        visited[qy * sw + qx] = 1
+
+        var minX = qx, maxX = qx, minY = qy, maxY = qy
+        var head = 0
+        let dirs = [(1,0),(-1,0),(0,1),(0,-1)]
+        while head < queueX.count {
+            let x = queueX[head]
+            let y = queueY[head]
+            head += 1
+            minX = min(minX, x); maxX = max(maxX, x)
+            minY = min(minY, y); maxY = max(maxY, y)
+            for (dx,dy) in dirs {
+                let nx = x + dx, ny = y + dy
+                guard nx >= 0, nx < sw, ny >= 0, ny < sh else { continue }
+                let idx = ny * sw + nx
+                guard visited[idx] == 0, transparent(nx, ny) else { continue }
+                visited[idx] = 1
+                queueX.append(nx); queueY.append(ny)
+            }
+        }
+
         return CGRect(
-            x: portrait.minY,
-            y: portraitFrameSize(for: window).width - portrait.maxX,
-            width: portrait.height,
-            height: portrait.width
-        )
+            x: CGFloat(minX * step),
+            y: CGFloat(minY * step),
+            width: CGFloat((maxX - minX + 1) * step),
+            height: CGFloat((maxY - minY + 1) * step)
+        ).intersection(CGRect(x: 0, y: 0, width: width, height: height))
     }
 }
