@@ -65,6 +65,7 @@ final class SimulatorWindowState: ObservableObject, Identifiable {
     @Published var position: CGPoint
     @Published var displayScale: CGFloat
     @Published var isMoveMode = false
+    @Published var isMinimized = false
     @Published var reloadToken = UUID()
 
     init(

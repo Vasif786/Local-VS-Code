@@ -88,10 +88,11 @@ private struct SimulatorWebCanvas: UIViewRepresentable {
         private func applyLayout(canvas: CanvasView, window: SimulatorWindowState) {
             let frameSize = SimulatorLayout.frameSize(for: window)
             let hole = SimulatorLayout.screenRect(for: window)
+            // Keep WKWebView in the real portrait device viewport. In landscape
+            // the entire viewport is rotated together with the frame artwork.
+            // This prevents the WebView from sticking out of the frame or using
+            // swapped coordinates.
             let viewport = window.deviceType.viewportSize
-            let nativeViewport = window.orientation == .portrait
-                ? viewport
-                : CGSize(width: viewport.height, height: viewport.width)
 
             canvas.frame = CGRect(origin: .zero, size: frameSize)
             canvas.bounds = CGRect(origin: .zero, size: frameSize)
@@ -99,17 +100,17 @@ private struct SimulatorWebCanvas: UIViewRepresentable {
 
             guard let webView else { return }
 
-            // Keep WKWebView's own bounds at the real device viewport size.
-            // Only its visual transform changes to fit the frame's screen hole.
             webView.transform = .identity
-            webView.bounds = CGRect(origin: .zero, size: nativeViewport)
+            webView.bounds = CGRect(origin: .zero, size: viewport)
 
-            // Use independent X/Y fit so there can be no visible strip at the
-            // top/bottom of the iPad frame even when the supplied frame asset
-            // has a slightly different pixel aspect ratio.
-            let sx = hole.width / nativeViewport.width
-            let sy = hole.height / nativeViewport.height
-            webView.transform = CGAffineTransform(scaleX: sx, y: sy)
+            let sx = hole.width / viewport.width
+            let sy = hole.height / viewport.height
+            let fit = min(sx, sy)
+            let scale = CGAffineTransform(scaleX: fit, y: fit)
+            let rotation: CGAffineTransform = window.orientation == .landscape
+                ? CGAffineTransform(rotationAngle: -.pi / 2)
+                : .identity
+            webView.transform = rotation.concatenating(scale)
             webView.center = CGPoint(x: hole.midX, y: hole.midY)
 
             webView.layer.cornerRadius = min(hole.width, hole.height) * 0.028
@@ -133,6 +134,7 @@ struct SimulatorDeviceFrameView: View {
 
     @State private var showSettings = false
     @GestureState private var dragTranslation: CGSize = .zero
+    @GestureState private var minimizedDragTranslation: CGSize = .zero
     @EnvironmentObject private var simulatorManager: SimulatorManager
 
     private static let minScale: CGFloat = 0.38
@@ -149,17 +151,25 @@ struct SimulatorDeviceFrameView: View {
     }
 
     var body: some View {
-        VStack(spacing: 4) {
-            titleBar
-            controlBar
-            zoomBar
-            deviceView
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 4) {
+                titleBar
+                controlBar
+                zoomBar
+                deviceView
+            }
+            .frame(width: frameSize.width, alignment: .center)
+            .background(Color.clear)
+            .opacity(window.isMinimized ? 0 : 1)
+            .allowsHitTesting(!window.isMinimized)
+
+            if window.isMinimized {
+                minimizedPhoneIcon
+            }
         }
-        .frame(width: frameSize.width, alignment: .center)
-        // IMPORTANT: no large white/sideBar background. The view's bounds are
-        // now exactly the simulator + its controls, not a giant editor-sized
-        // white rectangle.
-        .background(Color.clear)
+        .frame(width: window.isMinimized ? 64 : frameSize.width,
+               height: window.isMinimized ? 64 : frameSize.height + 3 * (Self.controlHeight + 4),
+               alignment: .topLeading)
         .offset(
             x: window.position.x + dragTranslation.width,
             y: window.position.y + dragTranslation.height
@@ -168,6 +178,41 @@ struct SimulatorDeviceFrameView: View {
             SimulatorSettingsView(deviceType: window.deviceType)
                 .environmentObject(simulatorManager)
         }
+    }
+
+    private var minimizedPhoneIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .fill(Color.black.opacity(0.92))
+                .frame(width: 58, height: 58)
+                .shadow(radius: 8)
+
+            Image(systemName: window.deviceType.sfSymbol)
+                .font(.system(size: 25, weight: .semibold))
+                .foregroundColor(.white)
+        }
+        .frame(width: 64, height: 64)
+        .contentShape(Rectangle())
+        .offset(minimizedDragTranslation)
+        .gesture(
+            DragGesture(minimumDistance: 2, coordinateSpace: .global)
+                .updating($minimizedDragTranslation) { value, state, _ in
+                    guard window.isMoveMode else { return }
+                    state = value.translation
+                }
+                .onEnded { value in
+                    guard window.isMoveMode else { return }
+                    window.position = CGPoint(
+                        x: window.position.x + value.translation.width,
+                        y: window.position.y + value.translation.height
+                    )
+                }
+        )
+        .onTapGesture(count: 2) {
+            window.isMinimized = false
+        }
+        .accessibilityLabel("Minimized \(window.deviceType.displayName) simulator")
+        .accessibilityHint("Double tap to restore")
     }
 
     // MARK: Title / drag handle
@@ -246,6 +291,10 @@ struct SimulatorDeviceFrameView: View {
 
             simulatorButton(window.isMoveMode ? "lock.open.fill" : "location.fill") {
                 window.isMoveMode.toggle()
+            }
+
+            simulatorButton("minus.circle.fill", accessibilityLabel: "Minimize simulator") {
+                window.isMinimized = true
             }
 
             simulatorButton("xmark.circle.fill", action: onClose)
