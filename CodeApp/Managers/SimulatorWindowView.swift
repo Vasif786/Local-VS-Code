@@ -155,6 +155,7 @@ struct SimulatorDeviceFrameView: View {
             zoomBar
             deviceView
         }
+        .frame(width: frameSize.width, alignment: .center)
         // IMPORTANT: no large white/sideBar background. The view's bounds are
         // now exactly the simulator + its controls, not a giant editor-sized
         // white rectangle.
@@ -195,7 +196,7 @@ struct SimulatorDeviceFrameView: View {
                 .foregroundColor(.white.opacity(0.52))
         }
         .padding(.horizontal, 9)
-        .frame(height: Self.controlHeight)
+        .frame(width: frameSize.width, height: Self.controlHeight)
         .background(Color.black.opacity(0.88))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
@@ -223,7 +224,7 @@ struct SimulatorDeviceFrameView: View {
     // MARK: Controls
 
     private var controlBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             simulatorButton("gearshape.fill") {
                 showSettings = true
             }
@@ -235,7 +236,8 @@ struct SimulatorDeviceFrameView: View {
             simulatorButton(
                 window.orientation == .portrait
                     ? "rectangle.portrait.rotate"
-                    : "rectangle.landscape.rotate"
+                    : "rectangle.landscape.rotate",
+                accessibilityLabel: "Rotate simulator"
             ) {
                 window.orientation = window.orientation == .portrait
                     ? .landscape
@@ -248,7 +250,7 @@ struct SimulatorDeviceFrameView: View {
 
             simulatorButton("xmark.circle.fill", action: onClose)
         }
-        .frame(height: Self.controlHeight)
+        .frame(width: frameSize.width, height: Self.controlHeight)
         .padding(.horizontal, 8)
         .background(Color.black.opacity(0.78))
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -256,6 +258,7 @@ struct SimulatorDeviceFrameView: View {
 
     private func simulatorButton(
         _ image: String,
+        accessibilityLabel: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -266,6 +269,7 @@ struct SimulatorDeviceFrameView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel ?? image)
     }
 
     // MARK: Zoom
@@ -291,7 +295,7 @@ struct SimulatorDeviceFrameView: View {
             }
         }
         .foregroundColor(.white)
-        .frame(height: Self.controlHeight)
+        .frame(width: frameSize.width, height: Self.controlHeight)
         .padding(.horizontal, 6)
         .background(Color.black.opacity(0.78))
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -331,7 +335,7 @@ struct SimulatorDeviceFrameView: View {
                 )
                 .allowsHitTesting(false)
         }
-        .frame(width: frameSize.width, height: frameSize.height)
+        .frame(width: frameSize.width, height: frameSize.height, alignment: .center)
         .clipped()
     }
 }

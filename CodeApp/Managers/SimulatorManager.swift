@@ -160,7 +160,7 @@ enum SimulatorLayout {
 
     static func portraitFrameSize(for window: SimulatorWindowState) -> CGSize {
         let info = frameInfo(for: window.deviceType)
-        let baseHeight: CGFloat = window.deviceType == .iPhone14Pro ? 620 : 620
+        let baseHeight: CGFloat = 620
         let baseWidth = baseHeight * info.imageSize.width / info.imageSize.height
         let scaled = CGSize(width: baseWidth, height: baseHeight)
         return CGSize(width: scaled.width * window.displayScale,
@@ -192,6 +192,9 @@ enum SimulatorLayout {
         guard window.orientation == .landscape else { return portrait }
 
         let portraitFrame = portraitFrameSize(for: window)
+        // The frame artwork is rotated -90 degrees around its centre.
+        // Convert the portrait screen-hole coordinates into that rotated
+        // coordinate system so the WKWebView remains exactly inside the hole.
         return CGRect(
             x: portrait.minY,
             y: portraitFrame.width - portrait.maxX,
