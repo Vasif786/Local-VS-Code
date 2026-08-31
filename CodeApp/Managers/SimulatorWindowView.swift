@@ -100,17 +100,21 @@ private struct SimulatorWebCanvas: UIViewRepresentable {
 
             guard let webView else { return }
 
-            webView.transform = .identity
-            webView.bounds = CGRect(origin: .zero, size: viewport)
+            // V4 layout system: keep the WKWebView in the device's actual
+            // logical viewport and only scale it to the frame's screen hole.
+            // In landscape the viewport itself is swapped; the frame artwork
+            // is rotated separately, so no WebView rotation is applied here.
+            let nativeViewport: CGSize = window.orientation == .portrait
+                ? viewport
+                : CGSize(width: viewport.height, height: viewport.width)
 
-            let sx = hole.width / viewport.width
-            let sy = hole.height / viewport.height
-            let fit = min(sx, sy)
-            let scale = CGAffineTransform(scaleX: fit, y: fit)
-            let rotation: CGAffineTransform = window.orientation == .landscape
-                ? CGAffineTransform(rotationAngle: -.pi / 2)
-                : .identity
-            webView.transform = rotation.concatenating(scale)
+            webView.transform = .identity
+            webView.bounds = CGRect(origin: .zero, size: nativeViewport)
+
+            let fitX = hole.width / nativeViewport.width
+            let fitY = hole.height / nativeViewport.height
+            let fit = min(fitX, fitY)
+            webView.transform = CGAffineTransform(scaleX: fit, y: fit)
             webView.center = CGPoint(x: hole.midX, y: hole.midY)
 
             webView.layer.cornerRadius = min(hole.width, hole.height) * 0.028
@@ -279,9 +283,7 @@ struct SimulatorDeviceFrameView: View {
             }
 
             simulatorButton(
-                window.orientation == .portrait
-                    ? "rectangle.portrait.rotate"
-                    : "rectangle.landscape.rotate",
+                "rotate.right",
                 accessibilityLabel: "Rotate simulator"
             ) {
                 window.orientation = window.orientation == .portrait
