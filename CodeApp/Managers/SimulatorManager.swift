@@ -293,8 +293,8 @@ enum SimulatorLayout {
 
             // If the centre isn't transparent, use the viewport-sized fallback.
             guard centerAlpha < 128 else {
-                let insetX = width * 0.05
-                let insetY = height * 0.05
+                let insetX = CGFloat(width) * 0.05
+                let insetY = CGFloat(height) * 0.05
                 return CGRect(
                     x: insetX,
                     y: insetY,

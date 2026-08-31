@@ -377,9 +377,11 @@ private struct SimulatorSettingsView: View {
             }
             .navigationTitle("Simulator Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationBarItems(
-                trailing: Button("Close") { dismiss() }
-            )
+            .toolbar {
+                SwiftUI.ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Close") { dismiss() }
+                }
+            }
         }
         .onAppear {
             urlText = simulatorManager.urlDrafts[deviceType]
