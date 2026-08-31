@@ -298,8 +298,8 @@ enum SimulatorLayout {
                 return CGRect(
                     x: insetX,
                     y: insetY,
-                    width: width - insetX * 2,
-                    height: height - insetY * 2
+                    width: CGFloat(width) - insetX * 2,
+                    height: CGFloat(height) - insetY * 2
                 )
             }
 
