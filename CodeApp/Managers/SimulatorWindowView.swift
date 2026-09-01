@@ -1,218 +1,166 @@
 //
-//  SimulatorWindowView.swift
-//  Code
+// SimulatorWindowView.swift
+// CodeApp
 //
 
 import SwiftUI
 import WebKit
 import UIKit
 
-// MARK: - Interactive WebView
+// MARK: - Shared WKWebView canvas
 
 private struct SimulatorWebCanvas: UIViewRepresentable {
     @ObservedObject var window: SimulatorWindowState
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
 
     func makeUIView(context: Context) -> CanvasView {
         let canvas = CanvasView()
         canvas.backgroundColor = .clear
         canvas.clipsToBounds = true
-        context.coordinator.install(in: canvas, window: window)
+        context.coordinator.update(canvas: canvas, window: window)
         return canvas
     }
 
     func updateUIView(_ canvas: CanvasView, context: Context) {
-        context.coordinator.update(in: canvas, window: window)
+        context.coordinator.update(canvas: canvas, window: window)
     }
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     final class Coordinator {
-        private(set) var webView: WKWebView?
         private var lastURL: URL?
         private var lastReloadToken: UUID?
 
-        func install(in canvas: CanvasView, window: SimulatorWindowState) {
-            let configuration = WKWebViewConfiguration()
-            configuration.allowsInlineMediaPlayback = true
-            configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-            configuration.defaultWebpagePreferences.preferredContentMode = .mobile
-
-            let web = WKWebView(frame: .zero, configuration: configuration)
-            web.isOpaque = false
-            web.backgroundColor = .clear
-            web.scrollView.backgroundColor = .clear
-            web.isUserInteractionEnabled = true
-            web.scrollView.isUserInteractionEnabled = true
-            web.scrollView.contentInsetAdjustmentBehavior = .never
-            web.scrollView.minimumZoomScale = 1
-            web.scrollView.maximumZoomScale = 1
-            web.scrollView.zoomScale = 1
-            web.allowsBackForwardNavigationGestures = true
-
-            canvas.addSubview(web)
-            canvas.webView = web
-            webView = web
-
-            applyLayout(canvas: canvas, window: window)
-            loadIfNeeded(window: window)
-        }
-
-        func update(in canvas: CanvasView, window: SimulatorWindowState) {
-            guard webView != nil else {
-                install(in: canvas, window: window)
-                return
-            }
-
-            applyLayout(canvas: canvas, window: window)
-            loadIfNeeded(window: window)
-        }
-
-        private func loadIfNeeded(window: SimulatorWindowState) {
-            guard let webView else { return }
-
-            if lastURL != window.url || lastReloadToken != window.reloadToken {
-                lastURL = window.url
-                lastReloadToken = window.reloadToken
-                webView.load(
-                    URLRequest(
-                        url: window.url,
-                        cachePolicy: .useProtocolCachePolicy,
-                        timeoutInterval: 30
-                    )
-                )
-            }
-        }
-
-        private func applyLayout(canvas: CanvasView, window: SimulatorWindowState) {
+        func update(canvas: CanvasView, window: SimulatorWindowState) {
             let frameSize = SimulatorLayout.frameSize(for: window)
             let hole = SimulatorLayout.screenRect(for: window)
-            // Keep WKWebView in the real portrait device viewport. In landscape
-            // the entire viewport is rotated together with the frame artwork.
-            // This prevents the WebView from sticking out of the frame or using
-            // swapped coordinates.
-            let viewport = window.deviceType.viewportSize
-
             canvas.frame = CGRect(origin: .zero, size: frameSize)
             canvas.bounds = CGRect(origin: .zero, size: frameSize)
             canvas.clipsToBounds = true
 
-            guard let webView else { return }
+            let web = window.webViewStore.attach(to: canvas)
+            web.transform = .identity
 
-            // V4-style geometry: the WebView itself is laid out directly in
-            // the frame's screen hole. Do not scale it with CGAffineTransform.
-            // Transform-scaling was the reason landscape content could extend
-            // beyond the bezel and iPad portrait could show letter-box gaps.
-            // The browser viewport follows the physical screen-hole size.
+            // V4 geometry: keep a real device logical viewport and visually fit
+            // it into the supplied frame's screen hole. Landscape swaps the
+            // logical viewport dimensions but does not rotate the WebView a
+            // second time.
+            let viewport = window.deviceType.viewportSize
             let nativeViewport = window.orientation == .portrait
                 ? viewport
                 : CGSize(width: viewport.height, height: viewport.width)
-            _ = nativeViewport
 
-            webView.transform = .identity
-            webView.frame = hole
+            web.bounds = CGRect(origin: .zero, size: nativeViewport)
+            let scaleX = hole.width / max(nativeViewport.width, 1)
+            let scaleY = hole.height / max(nativeViewport.height, 1)
+            let scale = min(scaleX, scaleY)
+            web.transform = CGAffineTransform(scaleX: scale, y: scale)
+            web.center = CGPoint(x: hole.midX, y: hole.midY)
+            web.layer.cornerRadius = min(hole.width, hole.height) * 0.035
+            web.clipsToBounds = true
+            canvas.bringSubviewToFront(web)
 
-            // Keep the simulated viewport proportional to the real device.
-            // When the supplied artwork has a tiny aspect-ratio rounding error,
-            // the hole remains authoritative so no white gap can appear.
-            webView.bounds = CGRect(origin: .zero, size: hole.size)
-            webView.center = CGPoint(x: hole.midX, y: hole.midY)
-
-            webView.layer.cornerRadius = min(hole.width, hole.height) * 0.028
-            webView.clipsToBounds = true
-            webView.layer.masksToBounds = true
-
-            canvas.bringSubviewToFront(webView)
+            if lastURL != window.url {
+                lastURL = window.url
+                lastReloadToken = window.reloadToken
+                window.webViewStore.load(window.url)
+            } else if lastReloadToken != window.reloadToken {
+                lastReloadToken = window.reloadToken
+                window.webViewStore.load(window.url)
+            }
         }
     }
 
-    final class CanvasView: UIView {
-        weak var webView: WKWebView?
-    }
+    final class CanvasView: UIView {}
 }
 
-// MARK: - Simulator window
+// MARK: - Main simulator
 
 struct SimulatorDeviceFrameView: View {
     @ObservedObject var window: SimulatorWindowState
     let onClose: () -> Void
 
+    @EnvironmentObject private var simulatorManager: SimulatorManager
     @State private var showSettings = false
     @State private var showPreview = false
-    @State private var previewIsMinimized = false
-    @State private var showPreviewActions = false
+    @State private var previewMinimized = false
+    @State private var previewActions = false
     @GestureState private var dragTranslation: CGSize = .zero
     @GestureState private var minimizedDragTranslation: CGSize = .zero
-    @EnvironmentObject private var simulatorManager: SimulatorManager
 
     private static let minScale: CGFloat = 0.38
     private static let maxScale: CGFloat = 1.25
     private static let resizeStep: CGFloat = 0.05
     private static let controlHeight: CGFloat = 30
 
-    private var frameSize: CGSize {
-        SimulatorLayout.frameSize(for: window)
-    }
-
-    private var portraitFrameSize: CGSize {
-        SimulatorLayout.portraitFrameSize(for: window)
-    }
+    private var frameSize: CGSize { SimulatorLayout.frameSize(for: window) }
+    private var portraitFrameSize: CGSize { SimulatorLayout.portraitFrameSize(for: window) }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            VStack(spacing: 4) {
-                titleBar
-                controlBar
-                zoomBar
-                deviceView
-            }
-            .frame(width: frameSize.width, alignment: .center)
-            .background(Color.clear)
-            .opacity(window.isMinimized ? 0 : 1)
-            .allowsHitTesting(!window.isMinimized)
+        GeometryReader { proxy in
+            ZStack(alignment: .topLeading) {
+                // The simulator itself is positioned inside the editor.
+                if !window.isMinimized && !showPreview {
+                    VStack(spacing: 5) {
+                        titleBar
+                        controlsBar
+                        zoomBar
+                        deviceView
+                    }
+                    .frame(width: frameSize.width)
+                    .offset(x: window.position.x + dragTranslation.width,
+                            y: window.position.y + dragTranslation.height)
+                    .allowsHitTesting(true)
+                }
 
-            if window.isMinimized {
-                minimizedPhoneIcon
-            }
-        }
-        .frame(width: window.isMinimized ? 64 : frameSize.width,
-               height: window.isMinimized ? 64 : frameSize.height + 3 * (Self.controlHeight + 4),
-               alignment: .topLeading)
-        .offset(
-            x: window.position.x + dragTranslation.width,
-            y: window.position.y + dragTranslation.height
-        )
-        .overlay(alignment: .center) {
-            if showPreview {
-                SimulatorFullDevicePreview(
-                    window: window,
-                    onMinimize: {
-                        previewIsMinimized = true
-                        showPreview = false
-                    },
-                    onClose: {
-                        showPreview = false
-                        previewIsMinimized = false
-                        showPreviewActions = false
+                if window.isMinimized && !showPreview {
+                    SimulatorFloatingIcon(device: window.deviceType) {
+                        window.isMinimized = false
                     }
-                )
-                .transition(.scale.combined(with: .opacity))
-            } else if previewIsMinimized {
-                PreviewFloatingButton(
-                    device: window.deviceType,
-                    showActions: $showPreviewActions,
-                    onOpen: {
-                        showPreview = true
-                        previewIsMinimized = false
-                        showPreviewActions = false
-                    },
-                    onClose: {
-                        previewIsMinimized = false
-                        showPreviewActions = false
-                    }
-                )
+                    .offset(x: window.position.x + minimizedDragTranslation.width,
+                            y: window.position.y + minimizedDragTranslation.height)
+                    .gesture(minimizedDrag)
+                }
+
+                // Full Preview is deliberately NOT offset by simulator.position.
+                // It occupies the complete editor area, exactly like the video:
+                // one tap turns the device simulation into a full-screen preview.
+                if showPreview {
+                    FullDevicePreview(
+                        window: window,
+                        onMinimize: {
+                            showPreview = false
+                            previewMinimized = true
+                            previewActions = false
+                        },
+                        onClose: {
+                            showPreview = false
+                            previewMinimized = false
+                            previewActions = false
+                            onClose()
+                        }
+                    )
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                    .zIndex(100)
+                } else if previewMinimized {
+                    PreviewFloatingButton(
+                        device: window.deviceType,
+                        showActions: $previewActions,
+                        onMinimize: {
+                            // Return from the full preview to the normal simulator.
+                            previewMinimized = false
+                            previewActions = false
+                        },
+                        onClose: {
+                            previewMinimized = false
+                            previewActions = false
+                            onClose()
+                        }
+                    )
+                    .zIndex(110)
+                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .sheet(isPresented: $showSettings) {
             SimulatorSettingsView(deviceType: window.deviceType)
@@ -220,76 +168,34 @@ struct SimulatorDeviceFrameView: View {
         }
     }
 
-    private var minimizedPhoneIcon: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .fill(Color.black.opacity(0.92))
-                .frame(width: 58, height: 58)
-                .shadow(radius: 8)
-
-            Image(systemName: window.deviceType.sfSymbol)
-                .font(.system(size: 25, weight: .semibold))
-                .foregroundColor(.white)
-        }
-        .frame(width: 64, height: 64)
-        .contentShape(Rectangle())
-        .offset(minimizedDragTranslation)
-        .gesture(
-            DragGesture(minimumDistance: 2, coordinateSpace: .global)
-                .updating($minimizedDragTranslation) { value, state, _ in
-                    state = value.translation
-                }
-                .onEnded { value in
-                    window.position = CGPoint(
-                        x: window.position.x + value.translation.width,
-                        y: window.position.y + value.translation.height
-                    )
-                }
-        )
-        .onTapGesture(count: 2) {
-            window.isMinimized = false
-        }
-        .accessibilityLabel("Minimized \(window.deviceType.displayName) simulator")
-        .accessibilityHint("Double tap to restore")
-    }
-
-    // MARK: Title / drag handle
+    // MARK: Main movement
 
     private var titleBar: some View {
         HStack(spacing: 7) {
             Image(systemName: window.isMoveMode ? "hand.draw.fill" : "lock.fill")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(window.isMoveMode ? 0.95 : 0.55))
-
             Text(window.deviceType.displayName)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.white.opacity(0.92))
                 .lineLimit(1)
-
             Spacer(minLength: 4)
-
             Capsule()
                 .fill(Color.white.opacity(window.isMoveMode ? 0.95 : 0.28))
                 .frame(width: 42, height: 4)
-
             Spacer(minLength: 4)
-
             Text(window.orientation.title)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.white.opacity(0.52))
+                .opacity(0.55)
         }
+        .foregroundColor(.white)
         .padding(.horizontal, 9)
         .frame(width: frameSize.width, height: Self.controlHeight)
         .background(Color.black.opacity(0.88))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
-        .gesture(moveGesture)
+        .gesture(mainDrag)
     }
 
-    /// The gesture only changes a local @GestureState while dragging. The
-    /// published window position is committed once, on release. This avoids
-    /// the feedback loop that previously made the whole CodeApp editor freeze.
-    private var moveGesture: some Gesture {
+    private var mainDrag: some Gesture {
         DragGesture(minimumDistance: 3, coordinateSpace: .global)
             .updating($dragTranslation) { value, state, _ in
                 guard window.isMoveMode else { return }
@@ -297,70 +203,47 @@ struct SimulatorDeviceFrameView: View {
             }
             .onEnded { value in
                 guard window.isMoveMode else { return }
-                window.position = CGPoint(
-                    x: window.position.x + value.translation.width,
-                    y: window.position.y + value.translation.height
-                )
+                window.position.x += value.translation.width
+                window.position.y += value.translation.height
             }
     }
 
     // MARK: Controls
 
-    private var controlBar: some View {
-        HStack(spacing: 4) {
-            simulatorButton("gearshape.fill") {
-                showSettings = true
+    private var controlsBar: some View {
+        HStack(spacing: 3) {
+            simButton("gearshape.fill", "Settings") { showSettings = true }
+            simButton("arrow.clockwise", "Reload") { window.reloadToken = UUID() }
+            simButton("rotate.right", "Rotate") {
+                window.orientation = window.orientation == .portrait ? .landscape : .portrait
             }
-
-            simulatorButton("arrow.clockwise") {
-                window.reloadToken = UUID()
-            }
-
-            simulatorButton(
-                "rotate.right",
-                accessibilityLabel: "Rotate simulator"
-            ) {
-                window.orientation = window.orientation == .portrait
-                    ? .landscape
-                    : .portrait
-            }
-
-            simulatorButton("eye.fill", accessibilityLabel: "Open full device preview") {
-                previewIsMinimized = false
+            simButton("eye.fill", "Full preview") {
+                previewActions = false
+                previewMinimized = false
                 showPreview = true
-                showPreviewActions = false
             }
-
-            simulatorButton(window.isMoveMode ? "lock.open.fill" : "location.fill") {
+            simButton(window.isMoveMode ? "lock.open.fill" : "location.fill", "Move/Lock") {
                 window.isMoveMode.toggle()
             }
-
-            simulatorButton("minus.circle.fill", accessibilityLabel: "Minimize simulator") {
-                window.isMinimized = true
-            }
-
-            simulatorButton("xmark.circle.fill", action: onClose)
+            simButton("minus.circle.fill", "Minimize") { window.isMinimized = true }
+            simButton("xmark.circle.fill", "Close", action: onClose)
         }
         .frame(width: frameSize.width, height: Self.controlHeight)
-        .padding(.horizontal, 8)
-        .background(Color.black.opacity(0.78))
+        .padding(.horizontal, 7)
+        .background(Color.black.opacity(0.80))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private func simulatorButton(
-        _ image: String,
-        accessibilityLabel: String? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
+    private func simButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: image)
+            Image(systemName: icon)
                 .font(.system(size: 14, weight: .bold))
                 .foregroundColor(.white)
                 .frame(width: 28, height: 26)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel ?? image)
+        .accessibilityLabel(label)
     }
 
     // MARK: Zoom
@@ -368,121 +251,136 @@ struct SimulatorDeviceFrameView: View {
     private var zoomBar: some View {
         HStack(spacing: 5) {
             zoomButton("minus") {
-                window.displayScale = max(
-                    Self.minScale,
-                    window.displayScale - Self.resizeStep
-                )
+                window.displayScale = max(Self.minScale, window.displayScale - Self.resizeStep)
             }
-
             Text("\(Int(window.displayScale * 100))%")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .frame(width: 42)
-
             zoomButton("plus") {
-                window.displayScale = min(
-                    Self.maxScale,
-                    window.displayScale + Self.resizeStep
-                )
+                window.displayScale = min(Self.maxScale, window.displayScale + Self.resizeStep)
             }
         }
         .foregroundColor(.white)
         .frame(width: frameSize.width, height: Self.controlHeight)
-        .padding(.horizontal, 6)
-        .background(Color.black.opacity(0.78))
+        .background(Color.black.opacity(0.80))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private func zoomButton(
-        _ image: String,
-        action: @escaping () -> Void
-    ) -> some View {
+    private func zoomButton(_ icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: image)
+            Image(systemName: icon)
                 .font(.system(size: 12, weight: .bold))
                 .frame(width: 30, height: 26)
-                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: Device
+    // MARK: Device frame
 
     private var deviceView: some View {
         ZStack {
-            // Web content is below the frame, so the transparent screen hole
-            // in the PNG reveals it while the bezel/dynamic-island remains on top.
+            // V4 WebView system restored: the WKWebView keeps the real device
+            // viewport and gets a visual fit transform. The frame PNG is on top.
             SimulatorWebCanvas(window: window)
 
             Image(window.deviceType.frameImageName)
                 .resizable()
-                .frame(
-                    width: portraitFrameSize.width,
-                    height: portraitFrameSize.height
-                )
-                .rotationEffect(
-                    window.orientation == .landscape
-                        ? .degrees(-90)
-                        : .zero
-                )
+                .frame(width: portraitFrameSize.width, height: portraitFrameSize.height)
+                .rotationEffect(window.orientation == .landscape ? .degrees(-90) : .zero)
                 .allowsHitTesting(false)
         }
-        .frame(width: frameSize.width, height: frameSize.height, alignment: .center)
+        .frame(width: frameSize.width, height: frameSize.height)
         .clipped()
+        .animation(.easeInOut(duration: 0.16), value: window.orientation)
+        .animation(.easeInOut(duration: 0.12), value: window.displayScale)
+    }
+
+    private var minimizedDrag: some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: .global)
+            .updating($minimizedDragTranslation) { value, state, _ in
+                state = value.translation
+            }
+            .onEnded { value in
+                window.position.x += value.translation.width
+                window.position.y += value.translation.height
+            }
     }
 }
 
-// MARK: - Full device preview
+private struct SimulatorFloatingIcon: View {
+    let device: SimulatorDeviceType
+    let onRestore: () -> Void
 
-private struct SimulatorFullDevicePreview: View {
+    var body: some View {
+        Image(systemName: device.sfSymbol)
+            .font(.system(size: 24, weight: .semibold))
+            .foregroundColor(.white)
+            .frame(width: 58, height: 58)
+            .background(Color.black.opacity(0.94))
+            .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+            .shadow(radius: 8)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: onRestore)
+    }
+}
+
+// MARK: - Full preview
+
+private struct FullDevicePreview: View {
     @ObservedObject var window: SimulatorWindowState
     let onMinimize: () -> Void
     let onClose: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Image(systemName: window.deviceType.sfSymbol)
-                Text("Preview — \(window.deviceType.displayName)")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Button(action: onMinimize) {
-                    Image(systemName: "minus")
-                        .frame(width: 32, height: 28)
-                }
-                .buttonStyle(.plain)
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .frame(width: 32, height: 28)
-                }
-                .buttonStyle(.plain)
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 10)
-            .frame(height: 36)
-            .background(Color.black.opacity(0.9))
+        GeometryReader { proxy in
+            ZStack(alignment: .topLeading) {
+                Color.black.ignoresSafeArea()
 
-            FullPreviewDeviceCanvas(window: window)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                FullPreviewCanvas(window: window)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+
+                HStack(spacing: 8) {
+                    Image(systemName: window.deviceType.sfSymbol)
+                        .foregroundColor(.white)
+                    Text("Preview • \(window.deviceType.displayName)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Button(action: onMinimize) {
+                        Image(systemName: "minus")
+                            .foregroundColor(.white)
+                            .frame(width: 34, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .foregroundColor(.white)
+                            .frame(width: 34, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 40)
+                .background(Color.black.opacity(0.88))
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .padding(.top, 10)
+                .padding(.horizontal, 10)
+            }
         }
-        .padding(8)
-        .frame(maxWidth: 900, maxHeight: 1100)
-        .background(Color.black.opacity(0.96))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(radius: 24)
-        .padding(20)
+        .ignoresSafeArea()
     }
 }
 
-private struct FullPreviewDeviceCanvas: View {
+private struct FullPreviewCanvas: View {
     @ObservedObject var window: SimulatorWindowState
 
     var body: some View {
         GeometryReader { proxy in
             let base = SimulatorLayout.frameSize(for: window)
-            let available = CGSize(width: max(1, proxy.size.width - 20), height: max(1, proxy.size.height - 20))
-            let scale = min(available.width / base.width, available.height / base.height)
+            let availableWidth = max(1, proxy.size.width - 32)
+            let availableHeight = max(1, proxy.size.height - 72)
+            let scale = min(availableWidth / max(base.width, 1),
+                            availableHeight / max(base.height, 1))
 
             ZStack {
                 SimulatorWebCanvas(window: window)
@@ -490,45 +388,53 @@ private struct FullPreviewDeviceCanvas: View {
 
                 Image(window.deviceType.frameImageName)
                     .resizable()
-                    .frame(
-                        width: SimulatorLayout.portraitFrameSize(for: window).width,
-                        height: SimulatorLayout.portraitFrameSize(for: window).height
-                    )
+                    .frame(width: SimulatorLayout.portraitFrameSize(for: window).width,
+                           height: SimulatorLayout.portraitFrameSize(for: window).height)
                     .rotationEffect(window.orientation == .landscape ? .degrees(-90) : .zero)
                     .allowsHitTesting(false)
             }
             .frame(width: base.width, height: base.height)
             .scaleEffect(scale)
-            .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+            .position(x: proxy.size.width / 2,
+                      y: proxy.size.height / 2 + 18)
         }
     }
 }
 
+// MARK: - Preview floating control
+
 private struct PreviewFloatingButton: View {
     let device: SimulatorDeviceType
     @Binding var showActions: Bool
-    let onOpen: () -> Void
+    let onMinimize: () -> Void
     let onClose: () -> Void
 
-    @State private var dragOffset: CGSize = .zero
     @State private var baseOffset: CGSize = .zero
+    @GestureState private var drag: CGSize = .zero
 
     var body: some View {
         VStack(spacing: 6) {
             if showActions {
-                HStack(spacing: 5) {
-                    Button(action: onOpen) {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .frame(width: 30, height: 30)
+                HStack(spacing: 6) {
+                    Button(action: onMinimize) {
+                        Image(systemName: "minus.circle.fill")
+                            .font(.system(size: 29))
+                            .foregroundColor(.white)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Minimize preview")
 
                     Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .frame(width: 30, height: 30)
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 29))
+                            .foregroundColor(.white)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close simulator and preview")
                 }
+                .padding(5)
+                .background(Color.black.opacity(0.90))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
 
             Image(systemName: device.sfSymbol)
@@ -539,36 +445,25 @@ private struct PreviewFloatingButton: View {
                 .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
                 .shadow(radius: 8)
                 .contentShape(Rectangle())
-                .offset(dragOffset)
+                .offset(drag)
                 .gesture(
                     DragGesture(minimumDistance: 2)
-                        .onChanged { value in
-                            dragOffset = CGSize(
-                                width: baseOffset.width + value.translation.width,
-                                height: baseOffset.height + value.translation.height
-                            )
-                        }
+                        .updating($drag) { value, state, _ in state = value.translation }
                         .onEnded { value in
-                            baseOffset = CGSize(
-                                width: baseOffset.width + value.translation.width,
-                                height: baseOffset.height + value.translation.height
-                            )
-                            dragOffset = baseOffset
+                            baseOffset.width += value.translation.width
+                            baseOffset.height += value.translation.height
                         }
                 )
-                .onTapGesture(count: 2) {
-                    showActions.toggle()
-                }
+                .offset(baseOffset)
+                .onTapGesture(count: 2) { showActions.toggle() }
         }
     }
 }
-
 
 // MARK: - Settings
 
 private struct SimulatorSettingsView: View {
     let deviceType: SimulatorDeviceType
-
     @EnvironmentObject private var simulatorManager: SimulatorManager
     @Environment(\.dismiss) private var dismiss
     @State private var urlText = ""
@@ -584,23 +479,16 @@ private struct SimulatorSettingsView: View {
 
                     Button("Save & Reload") {
                         let value = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard let url = URL(string: value),
-                              let scheme = url.scheme,
-                              !scheme.isEmpty else { return }
+                        guard let url = URL(string: value), url.scheme != nil else { return }
                         simulatorManager.saveURL(url, for: deviceType)
                         dismiss()
                     }
-                    .disabled(
-                        URL(string: urlText.trimmingCharacters(in: .whitespacesAndNewlines))?.scheme == nil
-                    )
                 }
 
                 Section("Simulator") {
                     Text("Device: \(deviceType.displayName)")
                     Text("Viewport: \(Int(deviceType.viewportSize.width)) × \(Int(deviceType.viewportSize.height))")
-                    Text("The viewport stays fixed. + / − changes only the simulator's visual size.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
                 }
             }
             .navigationTitle("Simulator Settings")
@@ -626,27 +514,16 @@ struct SimulatorWindowsOverlay: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             ForEach(manager.windows) { window in
-                SimulatorDeviceFrameView(
-                    window: window,
-                    onClose: { manager.close(window) }
-                )
-                .environmentObject(manager)
+                SimulatorDeviceFrameView(window: window, onClose: { manager.close(window) })
+                    .environmentObject(manager)
             }
         }
         .allowsHitTesting(true)
-        .confirmationDialog(
-            "Open Simulator",
-            isPresented: $manager.showDevicePicker,
-            titleVisibility: .visible
-        ) {
-            Button("iPhone 14 Pro") {
-                manager.open(deviceType: .iPhone14Pro)
-            }
-
-            Button("iPad (5th generation)") {
-                manager.open(deviceType: .iPadPro)
-            }
-
+        .confirmationDialog("Open Simulator",
+                            isPresented: $manager.showDevicePicker,
+                            titleVisibility: .visible) {
+            Button("iPhone 14 Pro") { manager.open(deviceType: .iPhone14Pro) }
+            Button("iPad (5th generation)") { manager.open(deviceType: .iPadPro) }
             Button("Cancel", role: .cancel) {}
         }
     }

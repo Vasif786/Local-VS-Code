@@ -1,11 +1,12 @@
 //
-//  SimulatorManager.swift
-//  Code
+// SimulatorManager.swift
+// CodeApp
 //
 
 import Foundation
 import SwiftUI
 import UIKit
+import WebKit
 
 // MARK: - Device
 
@@ -36,7 +37,7 @@ enum SimulatorDeviceType: String, CaseIterable, Identifiable {
         }
     }
 
-    // The CSS/logical viewport of the simulated device.
+    // Real logical viewport used by the web page.
     var viewportSize: CGSize {
         switch self {
         case .iPhone14Pro: return CGSize(width: 393, height: 852)
@@ -54,11 +55,59 @@ enum SimulatorOrientation: String, CaseIterable {
     }
 }
 
+// MARK: - Persistent WebView
+
+/// One WKWebView belongs to one simulator for its whole lifetime. The same
+/// object is moved between the normal simulator and Full Preview, so preview
+/// never starts a second page or refreshes the current page.
+final class SimulatorWebViewStore {
+    private(set) var webView: WKWebView?
+
+    func makeIfNeeded() -> WKWebView {
+        if let webView { return webView }
+
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.defaultWebpagePreferences.preferredContentMode = .mobile
+
+        let web = WKWebView(frame: .zero, configuration: configuration)
+        web.isOpaque = false
+        web.backgroundColor = .clear
+        web.scrollView.backgroundColor = .clear
+        web.isUserInteractionEnabled = true
+        web.scrollView.isUserInteractionEnabled = true
+        web.scrollView.contentInsetAdjustmentBehavior = .never
+        web.scrollView.minimumZoomScale = 1
+        web.scrollView.maximumZoomScale = 1
+        web.scrollView.zoomScale = 1
+        web.allowsBackForwardNavigationGestures = true
+
+        webView = web
+        return web
+    }
+
+    func attach(to canvas: UIView) -> WKWebView {
+        let web = makeIfNeeded()
+        if web.superview !== canvas {
+            web.removeFromSuperview()
+            canvas.addSubview(web)
+        }
+        return web
+    }
+
+    func load(_ url: URL) {
+        let web = makeIfNeeded()
+        web.load(URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 30))
+    }
+}
+
 // MARK: - Window state
 
 final class SimulatorWindowState: ObservableObject, Identifiable {
     let id = UUID()
     let deviceType: SimulatorDeviceType
+    let webViewStore = SimulatorWebViewStore()
 
     @Published var url: URL
     @Published var orientation: SimulatorOrientation = .portrait
@@ -66,15 +115,9 @@ final class SimulatorWindowState: ObservableObject, Identifiable {
     @Published var displayScale: CGFloat
     @Published var isMoveMode = false
     @Published var isMinimized = false
-    @Published var isFullPreview = false
     @Published var reloadToken = UUID()
 
-    init(
-        deviceType: SimulatorDeviceType,
-        url: URL,
-        position: CGPoint,
-        displayScale: CGFloat = 0.62
-    ) {
+    init(deviceType: SimulatorDeviceType, url: URL, position: CGPoint, displayScale: CGFloat = 0.62) {
         self.deviceType = deviceType
         self.url = url
         self.position = position
@@ -105,8 +148,7 @@ final class SimulatorManager: ObservableObject {
 
     func savedURL(for type: SimulatorDeviceType) -> URL {
         if let value = UserDefaults.standard.string(forKey: Self.defaultsKey(for: type)),
-           let url = URL(string: value),
-           url.scheme != nil {
+           let url = URL(string: value), url.scheme != nil {
             return url
         }
         return Self.defaultURL
@@ -115,7 +157,6 @@ final class SimulatorManager: ObservableObject {
     func saveURL(_ url: URL, for type: SimulatorDeviceType) {
         UserDefaults.standard.set(url.absoluteString, forKey: Self.defaultsKey(for: type))
         urlDrafts[type] = url.absoluteString
-
         if let window = windows.first(where: { $0.deviceType == type }) {
             window.url = url
             window.reloadToken = UUID()
@@ -124,7 +165,7 @@ final class SimulatorManager: ObservableObject {
 
     func open(deviceType: SimulatorDeviceType) {
         if let existing = windows.first(where: { $0.deviceType == deviceType }) {
-            existing.isMoveMode = false
+            existing.isMinimized = false
             return
         }
 
@@ -143,11 +184,8 @@ final class SimulatorManager: ObservableObject {
     }
 }
 
-// MARK: - Frame layout
+// MARK: - Layout
 
-/// Frame geometry is calculated once and then cached. The old implementation
-/// flood-filled millions of pixels every SwiftUI update; during a drag that
-/// made the entire editor appear frozen. This cache removes that bottleneck.
 enum SimulatorLayout {
     struct FrameInfo {
         let imageSize: CGSize
@@ -164,45 +202,37 @@ enum SimulatorLayout {
         let info = frameInfo(for: window.deviceType)
         let baseHeight: CGFloat = 620
         let baseWidth = baseHeight * info.imageSize.width / info.imageSize.height
-        let scaled = CGSize(width: baseWidth, height: baseHeight)
-        return CGSize(width: scaled.width * window.displayScale,
-                      height: scaled.height * window.displayScale)
+        return CGSize(width: baseWidth * window.displayScale,
+                      height: baseHeight * window.displayScale)
     }
 
     static func frameSize(for window: SimulatorWindowState) -> CGSize {
-        let portrait = portraitFrameSize(for: window)
-        return window.orientation == .portrait
-            ? portrait
-            : CGSize(width: portrait.height, height: portrait.width)
+        let p = portraitFrameSize(for: window)
+        return window.orientation == .portrait ? p : CGSize(width: p.height, height: p.width)
     }
 
     static func portraitScreenRect(for window: SimulatorWindowState) -> CGRect {
         let info = frameInfo(for: window.deviceType)
         let baseHeight: CGFloat = 620
-        let factor = baseHeight / info.imageSize.height
-        let scale = factor * window.displayScale
-        return CGRect(
-            x: info.screenRect.minX * scale,
-            y: info.screenRect.minY * scale,
-            width: info.screenRect.width * scale,
-            height: info.screenRect.height * scale
-        )
+        let scale = baseHeight / info.imageSize.height * window.displayScale
+        return CGRect(x: info.screenRect.minX * scale,
+                      y: info.screenRect.minY * scale,
+                      width: info.screenRect.width * scale,
+                      height: info.screenRect.height * scale)
     }
 
+    /// This is the V4 coordinate system: portrait screen-hole is converted to
+    /// the coordinates of the -90° rotated frame. The WebView is then fitted
+    /// inside this rectangle with its real device viewport, without any extra
+    /// rotation of the web content.
     static func screenRect(for window: SimulatorWindowState) -> CGRect {
-        let portrait = portraitScreenRect(for: window)
-        guard window.orientation == .landscape else { return portrait }
-
+        let p = portraitScreenRect(for: window)
+        guard window.orientation == .landscape else { return p }
         let portraitFrame = portraitFrameSize(for: window)
-        // The frame artwork is rotated -90 degrees around its centre.
-        // Convert the portrait screen-hole coordinates into that rotated
-        // coordinate system so the WKWebView remains exactly inside the hole.
-        return CGRect(
-            x: portrait.minY,
-            y: portraitFrame.width - portrait.maxX,
-            width: portrait.height,
-            height: portrait.width
-        )
+        return CGRect(x: p.minY,
+                      y: portraitFrame.width - p.maxX,
+                      width: p.height,
+                      height: p.width)
     }
 
     private final class FrameInfoCache {
@@ -218,7 +248,6 @@ enum SimulatorLayout {
             lock.unlock()
 
             let value = makeInfo(for: type)
-
             lock.lock()
             values[type] = value
             lock.unlock()
@@ -226,128 +255,99 @@ enum SimulatorLayout {
         }
 
         private func makeInfo(for type: SimulatorDeviceType) -> FrameInfo {
-            guard let image = UIImage(named: type.frameImageName),
-                  let cgImage = image.cgImage else {
+            guard let image = UIImage(named: type.frameImageName), let cg = image.cgImage else {
                 return fallbackInfo(for: type)
             }
 
-            let width = CGFloat(cgImage.width)
-            let height = CGFloat(cgImage.height)
+            let w = CGFloat(cg.width)
+            let h = CGFloat(cg.height)
 
-            // The supplied iPhone 14 Pro frame has an exact transparent screen
-            // area of x=68, y=58, width=1179, height=2556 in its 1311x2672 PNG.
-            // Using those coordinates avoids an expensive pixel scan on every
-            // SwiftUI update and exactly matches the supplied frame asset.
-            if type == .iPhone14Pro, width == 1311, height == 2672 {
-                return FrameInfo(
-                    imageSize: CGSize(width: width, height: height),
-                    screenRect: CGRect(x: 68, y: 58, width: 1179, height: 2556)
-                )
+            // Exact screen hole of the supplied iPhone 14 Pro asset.
+            if type == .iPhone14Pro && cg.width == 1311 && cg.height == 2672 {
+                return FrameInfo(imageSize: CGSize(width: w, height: h),
+                                 screenRect: CGRect(x: 68, y: 58, width: 1179, height: 2556))
             }
 
-            // Other supplied frame assets are detected only once and cached.
-            let screen = transparentScreenRect(cgImage: cgImage)
-            return FrameInfo(
-                imageSize: CGSize(width: width, height: height),
-                screenRect: screen
-            )
+            return FrameInfo(imageSize: CGSize(width: w, height: h),
+                             screenRect: detectScreenRect(cg))
         }
 
         private func fallbackInfo(for type: SimulatorDeviceType) -> FrameInfo {
             switch type {
             case .iPhone14Pro:
-                return FrameInfo(
-                    imageSize: CGSize(width: 1311, height: 2672),
-                    screenRect: CGRect(x: 68, y: 58, width: 1179, height: 2556)
-                )
+                return FrameInfo(imageSize: CGSize(width: 1311, height: 2672),
+                                 screenRect: CGRect(x: 68, y: 58, width: 1179, height: 2556))
             case .iPadPro:
-                // Safe fallback only if the iPad frame asset is missing.
+                // Used only if the iPad frame asset is unavailable.
                 let size = CGSize(width: 1024, height: 1366)
-                return FrameInfo(
-                    imageSize: size,
-                    screenRect: CGRect(x: 24, y: 30, width: 976, height: 1306)
-                )
+                return FrameInfo(imageSize: size,
+                                 screenRect: CGRect(x: 35, y: 40, width: 954, height: 1286))
             }
         }
 
-        private func transparentScreenRect(cgImage: CGImage) -> CGRect {
-            let width = cgImage.width
-            let height = cgImage.height
-            let bytesPerPixel = 4
-            let bytesPerRow = width * bytesPerPixel
-            var data = [UInt8](repeating: 0, count: height * bytesPerRow)
+        /// Runs only once per device type, never during dragging/resizing.
+        private func detectScreenRect(_ cg: CGImage) -> CGRect {
+            let width = cg.width
+            let height = cg.height
+            let bpp = 4
+            let row = width * bpp
+            var pixels = [UInt8](repeating: 0, count: height * row)
 
-            guard let context = CGContext(
-                data: &data,
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bytesPerRow: bytesPerRow,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else {
+            guard let context = CGContext(data: &pixels,
+                                           width: width,
+                                           height: height,
+                                           bitsPerComponent: 8,
+                                           bytesPerRow: row,
+                                           space: CGColorSpaceCreateDeviceRGB(),
+                                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
                 return CGRect(x: 0, y: 0, width: width, height: height)
             }
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-            let centerX = min(max(width / 2, 0), width - 1)
-            let centerY = min(max(height / 2, 0), height - 1)
-            let start = Int(centerY) * bytesPerRow + Int(centerX) * bytesPerPixel
-            let centerAlpha = data[start + 3]
-
-            // If the centre isn't transparent, use the viewport-sized fallback.
-            guard centerAlpha < 128 else {
-                let insetX = CGFloat(width) * 0.05
-                let insetY = CGFloat(height) * 0.05
-                return CGRect(
-                    x: insetX,
-                    y: insetY,
-                    width: CGFloat(width) - insetX * 2,
-                    height: CGFloat(height) - insetY * 2
-                )
+            // Sample the asset down to <= 900 pixels on its longest edge.
+            let step = max(1, max(width, height) / 900)
+            let sw = (width + step - 1) / step
+            let sh = (height + step - 1) / step
+            func transparent(_ x: Int, _ y: Int) -> Bool {
+                let px = min(width - 1, x * step)
+                let py = min(height - 1, y * step)
+                return pixels[py * row + px * bpp + 3] < 32
             }
 
-            var queue = [(Int, Int)]()
-            queue.reserveCapacity(min(width * height / 4, 1_000_000))
-            queue.append((Int(centerY), Int(centerX)))
+            let sx = sw / 2
+            let sy = sh / 2
+            guard transparent(sx, sy) else {
+                let ix = CGFloat(width) * 0.05
+                let iy = CGFloat(height) * 0.05
+                return CGRect(x: ix, y: iy, width: CGFloat(width) - ix * 2, height: CGFloat(height) - iy * 2)
+            }
 
-            var visited = [UInt8](repeating: 0, count: width * height)
-            visited[Int(centerY) * width + Int(centerX)] = 1
+            var visited = [Bool](repeating: false, count: sw * sh)
+            var q: [(Int, Int)] = [(sx, sy)]
+            visited[sy * sw + sx] = true
+            var head = 0
+            var minX = sx, maxX = sx, minY = sy, maxY = sy
 
-            var minX = width
-            var minY = height
-            var maxX = 0
-            var maxY = 0
-            var index = 0
-
-            while index < queue.count {
-                let (y, x) = queue[index]
-                index += 1
-
-                minX = min(minX, x)
-                minY = min(minY, y)
-                maxX = max(maxX, x)
-                maxY = max(maxY, y)
-
-                let neighbors = ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1))
-                for (ny, nx) in [neighbors.0, neighbors.1, neighbors.2, neighbors.3] {
-                    guard nx >= 0, nx < width, ny >= 0, ny < height else { continue }
-                    let vi = ny * width + nx
-                    guard visited[vi] == 0 else { continue }
-                    let alpha = data[ny * bytesPerRow + nx * bytesPerPixel + 3]
-                    guard alpha < 128 else { continue }
-                    visited[vi] = 1
-                    queue.append((ny, nx))
+            while head < q.count {
+                let (x, y) = q[head]
+                head += 1
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+                for (dx, dy) in [(1,0),(-1,0),(0,1),(0,-1)] {
+                    let nx = x + dx, ny = y + dy
+                    guard nx >= 0, nx < sw, ny >= 0, ny < sh else { continue }
+                    let index = ny * sw + nx
+                    guard !visited[index], transparent(nx, ny) else { continue }
+                    visited[index] = true
+                    q.append((nx, ny))
                 }
             }
 
-            return CGRect(
-                x: CGFloat(minX),
-                y: CGFloat(minY),
-                width: CGFloat(maxX - minX + 1),
-                height: CGFloat(maxY - minY + 1)
-            )
+            return CGRect(x: CGFloat(minX * step),
+                          y: CGFloat(minY * step),
+                          width: CGFloat((maxX - minX + 1) * step),
+                          height: CGFloat((maxY - minY + 1) * step))
+                .intersection(CGRect(x: 0, y: 0, width: width, height: height))
         }
     }
 }
