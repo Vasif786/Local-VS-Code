@@ -80,6 +80,7 @@ struct SimulatorDeviceFrameView: View {
     @GestureState private var dragTranslation: CGSize = .zero
     @GestureState private var minimizedDragTranslation: CGSize = .zero
     @EnvironmentObject private var simulatorManager: SimulatorManager
+    @Environment(\.colorScheme) private var colorScheme
 
     private static let minScale: CGFloat = 0.38
     private static let maxScale: CGFloat = 1.25
@@ -123,7 +124,7 @@ struct SimulatorDeviceFrameView: View {
     private var minimizedPhoneIcon: some View {
         Image(systemName: window.deviceType.sfSymbol)
             .font(.system(size: 29, weight: .semibold))
-            .foregroundColor(.primary)
+            .foregroundColor(colorScheme == .dark ? .white : .black)
             .frame(width: 64, height: 64)
             .contentShape(Rectangle())
             .offset(minimizedDragTranslation)
@@ -207,9 +208,7 @@ struct SimulatorDeviceFrameView: View {
             }
 
             simulatorButton(
-                window.orientation == .portrait
-                    ? "rectangle.portrait.rotate"
-                    : "rectangle.landscape.rotate",
+                "arrow.triangle.2.circlepath",
                 accessibilityLabel: "Rotate simulator"
             ) {
                 withAnimation(.easeInOut(duration: 0.18)) {
@@ -301,6 +300,10 @@ struct SimulatorDeviceFrameView: View {
                 .rotationEffect(
                     window.orientation == .landscape ? .degrees(-90) : .zero
                 )
+                // rotationEffect does not change SwiftUI layout bounds by itself.
+                // Give the rotated artwork its real landscape bounds so the
+                // WebView and frame share exactly the same coordinate space.
+                .frame(width: frameSize.width, height: frameSize.height)
                 .allowsHitTesting(false)
         }
         .frame(width: frameSize.width, height: frameSize.height)
@@ -421,6 +424,7 @@ private struct SimulatorFullScreenPreview: View {
     @State private var showActions = false
     @State private var floatingPosition = CGPoint(x: 42, y: 88)
     @GestureState private var dragTranslation: CGSize = .zero
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         GeometryReader { proxy in
@@ -474,7 +478,7 @@ private struct SimulatorFullScreenPreview: View {
 
             Image(systemName: window.deviceType.sfSymbol)
                 .font(.system(size: 24, weight: .semibold))
-                .foregroundColor(.primary)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
                 .frame(width: 58, height: 58)
                 .contentShape(Rectangle())
                 .gesture(
