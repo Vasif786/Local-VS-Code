@@ -253,6 +253,16 @@ class MainApp: ObservableObject {
             }
         }.store(in: &cancellables)
 
+        // Simulator R button -> the same terminal input path used by the
+        // terminal keyboard. Flutter's running process consumes `r` as hot
+        // reload; do not append Return because Flutter expects the single key.
+        NotificationCenter.default.publisher(
+            for: .codeAppSimulatorFlutterHotReload)
+            .sink { [weak self] _ in
+                self?.terminalManager.activeTerminal?.type(text: "r")
+            }
+            .store(in: &cancellables)
+
         // TODO: Support deleted files detection for remote files
         workSpaceStorage.onDirectoryChange { [weak self] url in
             DispatchQueue.main.async {
@@ -396,11 +406,41 @@ class MainApp: ObservableObject {
         // the local-file-only Python/Java path below at all. Applies to
         // any .dart file in the remote project, not just files under lib/.
         if !runeStoneEditorEnabled, languageServiceEnabled,
-            activeTextEditor.url.pathExtension == "dart",
-            !currentDirectoryURL.isFileURL
+            activeTextEditor.url.pathExtension == "dart"
         {
+            // Dart gets one unified editing experience in both modes:
+            // - remote/SFTP: analyzer-backed diagnostics + Flutter/Dart completion
+            //   through the existing SSH connection machinery;
+            // - local files: the same analyzer fallback, plus the normal Monaco
+            //   LSP bridge when a Dart SDK is available.
             await DartHybridIntelliSense.shared.activate(
                 app: self, editorURL: activeTextEditor.url, content: activeTextEditor.content)
+
+            if currentDirectoryURL.isFileURL {
+                // Let the existing Monaco LSP bridge try the real Dart analysis
+                // server as well. If the SDK is not installed, the analyzer
+                // fallback remains harmless and continues to provide diagnostics.
+                Task {
+                    let configuration = LanguageService.configurations.first {
+                        $0.languageIdentifier == "dart"
+                    }
+                    guard let configuration else { return }
+                    let connected = await self.monacoInstance.isLanguageServiceConnected
+                    if connected && LanguageService.shared.candidateLanguageIdentifier == "dart" {
+                        return
+                    }
+                    if connected { self.monacoInstance.disconnectLanguageService() }
+                    LanguageService.shared.candidateLanguageIdentifier = "dart"
+                    self.monacoInstance.connectLanguageService(
+                        serverURL: URL(
+                            string: "ws://127.0.0.1:\(String(AppExtensionService.PORT))/websocket"
+                        )!,
+                        serverArgs: configuration.args,
+                        pwd: currentDirectoryURL,
+                        languageIdentifier: configuration.languageIdentifier
+                    )
+                }
+            }
             return
         }
 

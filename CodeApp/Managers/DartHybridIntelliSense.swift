@@ -206,6 +206,49 @@ private let dartCompletionProviderScript = #"""
         {l:"FloatingActionButton", k:"Constructor", d:"FloatingActionButton({required VoidCallback? onPressed, Widget? child})"}
     ];
 
+    // Common Flutter named parameters. These are deliberately separate from
+    // widget constructors so typing `backgroundColor:` or `padding:` shows
+    // the property/value-oriented suggestions instead of a list of widgets.
+    var FLUTTER_PROPERTIES = [
+        {l:"backgroundColor", k:"Property", d:"Color? backgroundColor"},
+        {l:"color", k:"Property", d:"Color? color"},
+        {l:"foregroundColor", k:"Property", d:"Color? foregroundColor"},
+        {l:"surfaceTintColor", k:"Property", d:"Color? surfaceTintColor"},
+        {l:"shadowColor", k:"Property", d:"Color? shadowColor"},
+        {l:"padding", k:"Property", d:"EdgeInsetsGeometry? padding"},
+        {l:"margin", k:"Property", d:"EdgeInsetsGeometry? margin"},
+        {l:"width", k:"Property", d:"double? width"},
+        {l:"height", k:"Property", d:"double? height"},
+        {l:"constraints", k:"Property", d:"BoxConstraints? constraints"},
+        {l:"alignment", k:"Property", d:"AlignmentGeometry? alignment"},
+        {l:"decoration", k:"Property", d:"Decoration? decoration"},
+        {l:"foregroundDecoration", k:"Property", d:"Decoration? foregroundDecoration"},
+        {l:"borderRadius", k:"Property", d:"BorderRadius? borderRadius"},
+        {l:"border", k:"Property", d:"Border? border"},
+        {l:"shape", k:"Property", d:"ShapeBorder? shape"},
+        {l:"elevation", k:"Property", d:"double? elevation"},
+        {l:"title", k:"Property", d:"Widget? title"},
+        {l:"leading", k:"Property", d:"Widget? leading"},
+        {l:"trailing", k:"Property", d:"Widget? trailing"},
+        {l:"actions", k:"Property", d:"List<Widget>? actions"},
+        {l:"body", k:"Property", d:"Widget? body"},
+        {l:"child", k:"Property", d:"Widget? child"},
+        {l:"children", k:"Property", d:"List<Widget> children"},
+        {l:"onPressed", k:"Property", d:"VoidCallback? onPressed"},
+        {l:"onTap", k:"Property", d:"GestureTapCallback? onTap"},
+        {l:"style", k:"Property", d:"TextStyle? style"},
+        {l:"fontSize", k:"Property", d:"double? fontSize"},
+        {l:"fontWeight", k:"Property", d:"FontWeight? fontWeight"},
+        {l:"textAlign", k:"Property", d:"TextAlign? textAlign"},
+        {l:"mainAxisAlignment", k:"Property", d:"MainAxisAlignment mainAxisAlignment"},
+        {l:"crossAxisAlignment", k:"Property", d:"CrossAxisAlignment crossAxisAlignment"},
+        {l:"mainAxisSize", k:"Property", d:"MainAxisSize mainAxisSize"},
+        {l:"fit", k:"Property", d:"BoxFit fit"},
+        {l:"icon", k:"Property", d:"IconData? icon"},
+        {l:"size", k:"Property", d:"double? size"},
+        {l:"duration", k:"Property", d:"Duration duration"}
+    ];
+
     function kindOf(k) {
         var m = monaco.languages.CompletionItemKind;
         switch (k) {
@@ -275,6 +318,21 @@ private let dartCompletionProviderScript = #"""
                 // Unknown receiver type: offer nothing rather than a
                 // misleading guess (see the file header's known limitation).
                 return { suggestions: [] };
+            }
+
+            // Named-argument completion. If the user has already typed a
+            // property prefix (e.g. `backgroundC`), return matching Flutter
+            // properties so the list behaves like an IDE instead of only
+            // offering widget names.
+            var namedArgumentMatch = textBeforeCursor.match(/(?:^|[,\n])\s*([A-Za-z_][A-Za-z0-9_]*)$/);
+            if (namedArgumentMatch) {
+                var prefix = namedArgumentMatch[1].toLowerCase();
+                var propertySuggestions = FLUTTER_PROPERTIES.filter(function (p) {
+                    return p.l.toLowerCase().indexOf(prefix) === 0;
+                });
+                if (propertySuggestions.length) {
+                    return { suggestions: propertySuggestions.map(function (p) { return toSuggestion(p, range); }) };
+                }
             }
 
             var widgetPropertyContext =
@@ -420,6 +478,39 @@ private final class OneShotSSHCommandRunner: NSObject, NMSSHChannelDelegate {
     }
 }
 
+// MARK: - Local analyzer runner
+
+/// Runs the installed Dart SDK against a local temporary file without using
+/// the user's visible terminal. This is a fallback/diagnostics path; the
+/// normal Monaco LSP bridge is also allowed to connect to `dart language-server`
+/// when the SDK is available.
+private final class LocalDartAnalyzeRunner {
+    func run(root: URL, file: URL) async -> String {
+        await withCheckedContinuation { continuation in
+            var output = ""
+            let executor = Executor(
+                root: root,
+                sessionIdentifier: "com.thebaselab.codeapp.dart-analyzer.\(UUID().uuidString)",
+                onStdout: { data in output += String(decoding: data, as: UTF8.self) },
+                onStderr: { data in output += String(decoding: data, as: UTF8.self) },
+                onRequestInput: { prompt in output += prompt }
+            )
+
+            let quotedRoot = Self.shellQuoted(root.path)
+            let quotedFile = Self.shellQuoted(file.path)
+            executor.dispatch(
+                command: "cd \(quotedRoot) && dart analyze --format=machine \(quotedFile)"
+            ) { _ in
+                continuation.resume(returning: output)
+            }
+        }
+    }
+
+    private static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
 // MARK: - Coordinator
 
 @MainActor
@@ -524,41 +615,70 @@ final class DartHybridIntelliSense {
     }
 
     private func runAnalysis(app: MainApp, editorURL: URL, content: String, generation: Int) async {
-        guard app.workSpaceStorage.remoteConnected,
-            let connectionInfo = app.workSpaceStorage.currentRemoteConnectionInfo
-        else {
+        guard let contentData = content.data(using: .utf8) else { return }
+
+        if app.workSpaceStorage.remoteConnected {
+            guard let connectionInfo = app.workSpaceStorage.currentRemoteConnectionInfo else { return }
+            let projectRoot = await dartAnalysisRoot(app: app, forFileURL: editorURL)
+            let tempURL = editorURL.deletingLastPathComponent()
+                .appendingPathComponent("." + editorURL.deletingPathExtension().lastPathComponent + Self.tempFileSuffix)
+            let rootPath = projectRoot.path
+            let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+            let relativeTempPath = String(tempURL.path.dropFirst(rootPrefix.count))
+            let quotedRoot = "'" + rootPath.replacingOccurrences(of: "'", with: "'\\''") + "'"
+            let quotedRelativeTemp = "'" + relativeTempPath.replacingOccurrences(of: "'", with: "'\\''") + "'"
+
+            try? await app.workSpaceStorage.write(
+                at: tempURL, content: contentData, atomically: true, overwrite: true)
+            defer {
+                Task { try? await app.workSpaceStorage.removeItem(at: tempURL) }
+            }
+
+            let command = "cd \(quotedRoot) && dart analyze --format=machine \(quotedRelativeTemp)"
+            let output: String
+            do {
+                output = try await OneShotSSHCommandRunner().run(
+                    host: connectionInfo.host, authenticationMode: connectionInfo.authenticationMode,
+                    command: command)
+            } catch {
+                return
+            }
+
+            guard generation == self.generation else { return }
+            let diagnostics = Self.parseMachineOutput(output, matchingFileSuffix: relativeTempPath)
+            await pushMarkers(app: app, editorURL: editorURL, diagnostics: diagnostics)
             return
         }
-        let projectRoot = await dartAnalysisRoot(app: app, forFileURL: editorURL)
 
+        // Local project: analyze the unsaved buffer in a hidden temporary file.
+        guard editorURL.isFileURL else { return }
+        let projectRoot = localDartProjectRoot(for: editorURL)
         let tempURL = editorURL.deletingLastPathComponent()
             .appendingPathComponent("." + editorURL.deletingPathExtension().lastPathComponent + Self.tempFileSuffix)
-        let rootPath = projectRoot.path
-        let relativeTempPath = String(tempURL.path.dropFirst((rootPath.hasSuffix("/") ? rootPath : rootPath + "/").count))
-        let quotedRoot = "'" + rootPath.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        let quotedRelativeTemp = "'" + relativeTempPath.replacingOccurrences(of: "'", with: "'\\''") + "'"
-
-        guard let contentData = content.data(using: .utf8) else { return }
-        try? await app.workSpaceStorage.write(
-            at: tempURL, content: contentData, atomically: true, overwrite: true)
-        defer {
-            Task { try? await app.workSpaceStorage.removeItem(at: tempURL) }
-        }
-
-        let command = "cd \(quotedRoot) && dart analyze --format=machine \(quotedRelativeTemp)"
-        let output: String
         do {
-            output = try await OneShotSSHCommandRunner().run(
-                host: connectionInfo.host, authenticationMode: connectionInfo.authenticationMode,
-                command: command)
+            try contentData.write(to: tempURL, options: .atomic)
+            let output = await LocalDartAnalyzeRunner().run(root: projectRoot, file: tempURL)
+            try? FileManager.default.removeItem(at: tempURL)
+            guard generation == self.generation else { return }
+
+            let diagnostics = Self.parseMachineOutput(output, matchingFileSuffix: tempURL.path)
+            await pushMarkers(app: app, editorURL: editorURL, diagnostics: diagnostics)
         } catch {
-            return  // background diagnostics — fail silently, don't interrupt typing
+            try? FileManager.default.removeItem(at: tempURL)
         }
+    }
 
-        guard generation == self.generation else { return }  // superseded while we were waiting
-
-        let diagnostics = Self.parseMachineOutput(output, matchingFileSuffix: relativeTempPath)
-        await pushMarkers(app: app, editorURL: editorURL, diagnostics: diagnostics)
+    private func localDartProjectRoot(for fileURL: URL) -> URL {
+        var current = fileURL.deletingLastPathComponent()
+        let fm = FileManager.default
+        while true {
+            if fm.fileExists(atPath: current.appendingPathComponent("pubspec.yaml").path) {
+                return current
+            }
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path { return fileURL.deletingLastPathComponent() }
+            current = parent
+        }
     }
 
     /// Parses `dart analyze --format=machine` output:

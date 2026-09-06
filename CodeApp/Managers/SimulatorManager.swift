@@ -206,6 +206,20 @@ final class SimulatorManager: ObservableObject {
     func closePreview() {
         previewWindowID = nil
     }
+
+    /// Sends the single `r` key to Code App's currently active terminal.
+    /// Flutter's running tool interprets this as hot reload. The terminal
+    /// itself remains untouched; this is just the same input path used by
+    /// its on-screen keyboard.
+    func sendFlutterHotReload() {
+        NotificationCenter.default.post(
+            name: .codeAppSimulatorFlutterHotReload, object: nil)
+    }
+}
+
+extension Notification.Name {
+    static let codeAppSimulatorFlutterHotReload = Notification.Name(
+        "codeapp.simulator.flutterHotReload")
 }
 
 // MARK: - Frame layout
@@ -326,11 +340,14 @@ enum SimulatorLayout {
                     screenRect: CGRect(x: 68, y: 58, width: 1179, height: 2556)
                 )
             case .iPadPro:
-                // Safe fallback only if the iPad frame asset is missing.
-                let size = CGSize(width: 1024, height: 1366)
+                // Exact geometry of the bundled 708x1020 iPad frame. The
+                // transparent display opening is 593x818 at (52,93). Keeping
+                // this exact rect avoids the old 5% fallback which left visible
+                // gaps above/below the simulated screen.
+                let size = CGSize(width: 708, height: 1020)
                 return FrameInfo(
                     imageSize: size,
-                    screenRect: CGRect(x: 24, y: 30, width: 976, height: 1306)
+                    screenRect: CGRect(x: 52, y: 93, width: 593, height: 818)
                 )
             }
         }

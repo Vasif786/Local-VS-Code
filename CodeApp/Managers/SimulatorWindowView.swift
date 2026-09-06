@@ -55,9 +55,14 @@ private struct SimulatorWebCanvas: UIViewRepresentable {
 
             let fitX = hole.width / max(nativeViewport.width, 1)
             let fitY = hole.height / max(nativeViewport.height, 1)
-            let scale = min(fitX, fitY)
 
-            webView.transform = CGAffineTransform(scaleX: scale, y: scale)
+            // The iPhone asset is already the exact 393:852 ratio. The
+            // bundled iPad frame is a few pixels off the real 4:3 ratio, so
+            // using independent X/Y fitting fills the actual transparent
+            // screen opening instead of leaving a top/bottom gap or spilling
+            // outside the frame. The WKWebView's logical bounds stay at the
+            // real device viewport, so website CSS sizes do not change.
+            webView.transform = CGAffineTransform(scaleX: fitX, y: fitY)
             webView.center = CGPoint(x: hole.midX, y: hole.midY)
             webView.layer.cornerRadius = min(hole.width, hole.height) * 0.035
             webView.clipsToBounds = true
@@ -86,6 +91,12 @@ struct SimulatorDeviceFrameView: View {
     private static let maxScale: CGFloat = 1.25
     private static let resizeStep: CGFloat = 0.05
     private static let controlHeight: CGFloat = 30
+
+    // Eight controls now fit even on the smallest visual iPhone size.
+    private var controlButtonWidth: CGFloat {
+        let available = max(160, frameSize.width - 12)
+        return min(28, max(20, (available - 7) / 8))
+    }
 
     private var frameSize: CGSize { SimulatorLayout.frameSize(for: window) }
     private var portraitFrameSize: CGSize { SimulatorLayout.portraitFrameSize(for: window) }
@@ -197,7 +208,7 @@ struct SimulatorDeviceFrameView: View {
     // MARK: Controls
 
     private var controlBar: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 1) {
             simulatorButton("gearshape.fill") {
                 showSettings = true
             }
@@ -215,6 +226,16 @@ struct SimulatorDeviceFrameView: View {
                     window.orientation = window.orientation == .portrait ? .landscape : .portrait
                 }
             }
+
+            Button(action: { simulatorManager.sendFlutterHotReload() }) {
+                Text("R")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .frame(width: controlButtonWidth, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Flutter hot reload")
 
             simulatorButton("eye.fill", accessibilityLabel: "Open full screen preview") {
                 simulatorManager.openPreview(for: window)
@@ -246,7 +267,7 @@ struct SimulatorDeviceFrameView: View {
             Image(systemName: image)
                 .font(.system(size: 14, weight: .bold))
                 .foregroundColor(.white)
-                .frame(width: 28, height: 26)
+                .frame(width: controlButtonWidth, height: 26)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
