@@ -374,6 +374,13 @@ class MainApp: ObservableObject {
         }
     }
 
+    private func requestInteractiveKeyboard(prompt: String) async -> String {
+        return
+            (try? await authenticationRequestManager.requestPasswordAuthentication(
+                title: "\(prompt)", usernameTitleKey: ""
+            ).0) ?? ""
+    }
+
     private func updateActiveEditor() async {
         guard let activeTextEditor else {
             Task {
@@ -400,45 +407,27 @@ class MainApp: ObservableObject {
             return
         }
 
-        // Dart/Flutter in a remote SSH project: handled by the separate
-        // hybrid completion+analyzer system (no LSP, no persistent second
-        // connection) — see DartHybridIntelliSense.swift. Does not touch
-        // the local-file-only Python/Java path below at all. Applies to
-        // any .dart file in the remote project, not just files under lib/.
+        // Dart/Flutter is intentionally REMOTE-ONLY. The real Dart analysis
+        // server runs on the SSH host and communicates with Monaco through
+        // RemoteDartLanguageServer. No local Dart SDK/analyzer is started.
         if !runeStoneEditorEnabled, languageServiceEnabled,
             activeTextEditor.url.pathExtension == "dart"
         {
-            // Dart gets one unified editing experience in both modes:
-            // - remote/SFTP: analyzer-backed diagnostics + Flutter/Dart completion
-            //   through the existing SSH connection machinery;
-            // - local files: the same analyzer fallback, plus the normal Monaco
-            //   LSP bridge when a Dart SDK is available.
-            await DartHybridIntelliSense.shared.activate(
-                app: self, editorURL: activeTextEditor.url, content: activeTextEditor.content)
+            guard workSpaceStorage.remoteConnected,
+                  let connectionInfo = workSpaceStorage.currentRemoteConnectionInfo else {
+                (monacoInstance as? MonacoImplementation)?.stopRemoteDartLanguageServer()
+                return
+            }
 
-            if currentDirectoryURL.isFileURL {
-                // Let the existing Monaco LSP bridge try the real Dart analysis
-                // server as well. If the SDK is not installed, the analyzer
-                // fallback remains harmless and continues to provide diagnostics.
+            if let monaco = monacoInstance as? MonacoImplementation {
                 Task {
-                    let configuration = LanguageService.configurations.first {
-                        $0.languageIdentifier == "dart"
-                    }
-                    guard let configuration else { return }
-                    let connected = await self.monacoInstance.isLanguageServiceConnected
-                    if connected && LanguageService.shared.candidateLanguageIdentifier == "dart" {
-                        return
-                    }
-                    if connected { self.monacoInstance.disconnectLanguageService() }
-                    LanguageService.shared.candidateLanguageIdentifier = "dart"
-                    self.monacoInstance.connectLanguageService(
-                        serverURL: URL(
-                            string: "ws://127.0.0.1:\(String(AppExtensionService.PORT))/websocket"
-                        )!,
-                        serverArgs: configuration.args,
-                        pwd: currentDirectoryURL,
-                        languageIdentifier: configuration.languageIdentifier
-                    )
+                    await monaco.startRemoteDartLanguageServer(
+                        host: connectionInfo.host,
+                        authenticationMode: connectionInfo.authenticationMode,
+                        onRequestInteractiveKeyboard: { [weak self] prompt in
+                            guard let self else { return "" }
+                            return await self.requestInteractiveKeyboard(prompt: prompt)
+                        })
                 }
             }
             return
@@ -1355,14 +1344,9 @@ extension MainApp: EditorImplementationDelegate {
         activeTextEditor?.currentVersionId = versionID
         activeTextEditor?.content = content
 
-        if let editorURL = activeTextEditor?.url, editorURL.absoluteString == url,
-            editorURL.pathExtension == "dart"
-        {
-            Task { @MainActor in
-                DartHybridIntelliSense.shared.scheduleAnalysis(
-                    app: self, editorURL: editorURL, content: content)
-            }
-        }
+        // The remote Dart LSP bridge receives didChange directly from Monaco,
+        // so no local/one-shot analyzer is triggered here.
+
     }
 
     func editorImplementation(cursorPositionDidChange line: Int, column: Int) {
