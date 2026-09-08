@@ -218,7 +218,12 @@ class MonacoImplementation: NSObject {
     function request(method, params) {
         return new Promise((resolve, reject) => {
             const id = nextId++;
-            pending.set(id, {resolve, reject});
+            const timer = setTimeout(() => {
+                if (!pending.has(id)) return;
+                pending.delete(id);
+                reject(new Error("Dart LSP timeout: " + method));
+            }, 15000);
+            pending.set(id, {resolve:(v)=>{clearTimeout(timer);resolve(v)}, reject:(e)=>{clearTimeout(timer);reject(e)}});
             post({jsonrpc:"2.0", id:id, method:method, params:params});
         });
     }
@@ -343,24 +348,35 @@ class MonacoImplementation: NSObject {
 
     window.__codeappStartDartLSP = async function (workspaceRoot) {
         const model = monaco.editor.getModel();
-        if (!model || model.getLanguageId() !== "dart") return;
-        const root = remoteFileURI(workspaceRoot || remoteFileURI(model.uri.toString()).split("/").slice(0,-1).join("/") || "file:///" );
+        if (!model || model.getLanguageId() !== "dart") {
+            console.warn("CodeApp Dart LSP: no active Dart Monaco model");
+            return;
+        }
+        const root = remoteFileURI(workspaceRoot || remoteFileURI(model.uri.toString()).split("/").slice(0,-1).join("/") || "file:///");
+        initialized = false;
         try {
-            await request("initialize", {
+            const result = await request("initialize", {
                 processId:null,
-                clientInfo:{name:"Code App",version:"remote-dart-lsp"},
+                clientInfo:{name:"Code App",version:"remote-dart-lsp-v22"},
+                locale:"en-US",
+                rootPath:null,
                 rootUri:root,
                 workspaceFolders:[{uri:root,name:"Flutter Project"}],
+                initializationOptions:{},
                 capabilities:{
+                    general:{positionEncodings:["utf-16"]},
                     textDocument:{
-                        completion:{completionItem:{snippetSupport:true,documentationFormat:["markdown","plaintext"]}},
-                        hover:{contentFormat:["markdown","plaintext"]},
-                        signatureHelp:{signatureInformation:{documentationFormat:["markdown","plaintext"]}},
-                        codeAction:{codeActionLiteralSupport:{codeActionKind:{valueSet:["quickfix","refactor","source"]}}}
+                        synchronization:{dynamicRegistration:false,willSave:false,willSaveWaitUntil:false,didSave:true},
+                        completion:{dynamicRegistration:false,completionItem:{snippetSupport:true,documentationFormat:["markdown","plaintext"],resolveSupport:{properties:["documentation","detail"]}}},
+                        hover:{dynamicRegistration:false,contentFormat:["markdown","plaintext"]},
+                        signatureHelp:{dynamicRegistration:false,signatureInformation:{documentationFormat:["markdown","plaintext"]}},
+                        publishDiagnostics:{relatedInformation:true,codeDescriptionSupport:true},
+                        codeAction:{dynamicRegistration:false,codeActionLiteralSupport:{codeActionKind:{valueSet:["quickfix","refactor","refactor.rewrite","source","source.organizeImports"]}}}
                     },
-                    workspace:{applyEdit:true,workspaceEdit:{documentChanges:true}}
+                    workspace:{applyEdit:true,workspaceEdit:{documentChanges:true},workspaceFolders:true,configuration:true}
                 }
             });
+            console.log("CodeApp Dart LSP initialized", result);
             notify("initialized", {});
             initialized = true;
             attachAll();
@@ -742,7 +758,14 @@ extension MonacoImplementation: EditorImplementation {
     /// Installs the native bridge used by the remote Dart analysis server.
     /// This is intentionally independent of the old local LSP bridge.
     func installRemoteDartLanguageServerBridge() async {
-        _ = try? await monacoWebView.evaluateJavaScriptAsync(Self.remoteDartLSPBridgeScript)
+        for _ in 0..<5 {
+            do {
+                let result = try await monacoWebView.evaluateJavaScriptAsync(Self.remoteDartLSPBridgeScript)
+                if result != nil || true { return }
+            } catch {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
     }
 
     func startRemoteDartLanguageServer(
@@ -767,8 +790,11 @@ extension MonacoImplementation: EditorImplementation {
             onReady: { [weak self] in
                 guard let self else { return }
                 Task { @MainActor in
+                    await self.installRemoteDartLanguageServerBridge()
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    let root = workspaceRoot.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
                     _ = try? await self.monacoWebView.evaluateJavaScriptAsync(
-                        "window.__codeappStartDartLSP && window.__codeappStartDartLSP('\(workspaceRoot.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'"))')")
+                        "window.__codeappStartDartLSP && window.__codeappStartDartLSP('\(root)')")
                 }
             })
     }

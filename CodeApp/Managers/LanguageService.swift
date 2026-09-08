@@ -112,7 +112,7 @@ final class RemoteDartLanguageServer: NSObject, NMSSHChannelDelegate, NMSSHSessi
                 // Content-Length protocol is not polluted by terminal escape codes.
                 try ssh.channel.startShell()
                 var error: NSError?
-                let command = "exec sh -lc \"exec dart language-server --protocol=lsp\"\n"
+                let command = "exec sh -c \"export PATH=/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/opt/flutter/bin:$PATH; exec dart language-server --protocol=lsp\"\n"
                 guard let commandData = command.data(using: .utf8) else {
                     self.emitError("Unable to encode Dart language server command.")
                     ssh.disconnect()
@@ -209,8 +209,12 @@ final class RemoteDartLanguageServer: NSObject, NMSSHChannelDelegate, NMSSHSessi
     }
 
     func channel(_ channel: NMSSHChannel, didReadRawError error: Data) {
-        // Do not inject stderr into the LSP stream. It is often startup text,
-        // and mixing it into stdout would corrupt Content-Length framing.
+        // Never mix stderr into stdout/LSP framing, but surface useful startup
+        // errors so a failed remote Dart command is diagnosable in Code App.
+        guard let text = String(data: error, encoding: .utf8), !text.isEmpty else { return }
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        self.emitError("Remote Dart LSP: " + clean)
     }
 
     func session(_ session: NMSSHSession, keyboardInteractiveRequest request: String) -> String {
