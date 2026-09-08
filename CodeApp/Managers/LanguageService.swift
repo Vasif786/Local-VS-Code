@@ -220,6 +220,6 @@ final class RemoteDartLanguageServer: NSObject, NMSSHChannelDelegate, NMSSHSessi
 
     func session(_ session: NMSSHSession, didDisconnectWithError error: Error) {
         isRunning = false
-        if let error { emitError(error.localizedDescription) }
+        emitError(error.localizedDescription)
     }
 }
