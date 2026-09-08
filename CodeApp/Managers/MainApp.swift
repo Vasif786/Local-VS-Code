@@ -422,6 +422,7 @@ class MainApp: ObservableObject {
             if let monaco = monacoInstance as? MonacoImplementation {
                 Task {
                     await monaco.startRemoteDartLanguageServer(
+                        workspaceRoot: currentDirectoryURL.absoluteString,
                         host: connectionInfo.host,
                         authenticationMode: connectionInfo.authenticationMode,
                         onRequestInteractiveKeyboard: { [weak self] prompt in

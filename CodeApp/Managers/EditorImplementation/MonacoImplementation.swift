@@ -266,7 +266,7 @@ class MonacoImplementation: NSObject {
         return map[k] || monaco.languages.CompletionItemKind.Text;
     }
     function sendDidOpen(model) {
-        if (!model || model.getLanguageId() !== "dart") return;
+        if (!initialized || !model || model.getLanguageId() !== "dart") return;
         const key = model.uri.toString();
         if (opened.has(key)) return;
         const uri = remoteFileURI(key);
@@ -341,11 +341,10 @@ class MonacoImplementation: NSObject {
         monaco.editor.getModels().forEach(m => monaco.editor.setModelMarkers(m, "dart-language-server", []));
     };
 
-    window.__codeappStartDartLSP = async function () {
-        attachAll();
+    window.__codeappStartDartLSP = async function (workspaceRoot) {
         const model = monaco.editor.getModel();
         if (!model || model.getLanguageId() !== "dart") return;
-        const root = remoteFileURI(model.uri.toString()).split("/").slice(0,-1).join("/") || "file:///";
+        const root = remoteFileURI(workspaceRoot || remoteFileURI(model.uri.toString()).split("/").slice(0,-1).join("/") || "file:///" );
         try {
             await request("initialize", {
                 processId:null,
@@ -365,11 +364,14 @@ class MonacoImplementation: NSObject {
             notify("initialized", {});
             initialized = true;
             attachAll();
-        } catch (_) {}
+        } catch (e) {
+            console.error("CodeApp remote Dart LSP initialize failed", e);
+            initialized = false;
+        }
     };
 
     monaco.languages.registerCompletionItemProvider("dart", {
-        triggerCharacters:[".",":"],
+        triggerCharacters:[".",":","("," "],
         provideCompletionItems: async function(model, position) {
             attachModel(model);
             if (!initialized) return {suggestions:[]};
@@ -399,6 +401,19 @@ class MonacoImplementation: NSObject {
             } catch (_) { return {suggestions:[]}; }
         }
     });
+
+    // Ask Monaco to show completion while typing, like an IDE. The provider
+    // remains LSP-backed; no local/fake Dart completion list is used.
+    function enableDartAutoSuggest() {
+        monaco.editor.getEditors().forEach(function(editor) {
+            editor.updateOptions({
+                quickSuggestions:{other:true,comments:false,strings:false},
+                suggestOnTriggerCharacters:true,
+                suggest:{showMethods:true,showFunctions:true,showConstructors:true,showFields:true,showVariables:true,showClasses:true,showStructs:true,showInterfaces:true,showModules:true,showProperties:true,showKeywords:true,showSnippets:true}
+            });
+        });
+    }
+    setTimeout(enableDartAutoSuggest, 500);
 
     monaco.languages.registerHoverProvider("dart", {
         provideHover: async function(model, position) {
@@ -731,6 +746,7 @@ extension MonacoImplementation: EditorImplementation {
     }
 
     func startRemoteDartLanguageServer(
+        workspaceRoot: String,
         host: URL,
         authenticationMode: RemoteAuthenticationMode,
         onRequestInteractiveKeyboard: @escaping (String) async -> String
@@ -752,7 +768,7 @@ extension MonacoImplementation: EditorImplementation {
                 guard let self else { return }
                 Task { @MainActor in
                     _ = try? await self.monacoWebView.evaluateJavaScriptAsync(
-                        "window.__codeappStartDartLSP && window.__codeappStartDartLSP()")
+                        "window.__codeappStartDartLSP && window.__codeappStartDartLSP('\(workspaceRoot.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'"))')")
                 }
             })
     }

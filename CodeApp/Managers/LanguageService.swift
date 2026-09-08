@@ -112,7 +112,7 @@ final class RemoteDartLanguageServer: NSObject, NMSSHChannelDelegate, NMSSHSessi
                 // Content-Length protocol is not polluted by terminal escape codes.
                 try ssh.channel.startShell()
                 var error: NSError?
-                let command = "exec dart language-server --protocol=lsp\n"
+                let command = "exec sh -lc \"exec dart language-server --protocol=lsp\"\n"
                 guard let commandData = command.data(using: .utf8) else {
                     self.emitError("Unable to encode Dart language server command.")
                     ssh.disconnect()
