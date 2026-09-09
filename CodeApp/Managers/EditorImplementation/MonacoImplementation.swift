@@ -303,9 +303,18 @@ class MonacoImplementation: NSObject {
             }
         });
     }
+    function activeDartModel() {
+        const editors = (typeof monaco.editor.getEditors === "function") ? monaco.editor.getEditors() : [];
+        for (const editor of editors) {
+            const model = editor.getModel();
+            if (model && model.getLanguageId() === "dart") return model;
+        }
+        const models = monaco.editor.getModels();
+        return models.find(m => m.getLanguageId() === "dart") || null;
+    }
     function attachAll() {
         monaco.editor.getModels().forEach(attachModel);
-        const current = monaco.editor.getModel();
+        const current = activeDartModel();
         if (current) attachModel(current);
     }
 
@@ -347,9 +356,16 @@ class MonacoImplementation: NSObject {
     };
 
     window.__codeappStartDartLSP = async function (workspaceRoot) {
-        const model = monaco.editor.getModel();
-        if (!model || model.getLanguageId() !== "dart") {
-            console.warn("CodeApp Dart LSP: no active Dart Monaco model");
+        let model = activeDartModel();
+        // createNewModel() is asynchronous in Code App. Do not race it.
+        // Wait briefly for Monaco to publish the Dart model instead of silently
+        // aborting the entire LSP startup.
+        for (let i = 0; !model && i < 40; i++) {
+            await new Promise(r => setTimeout(r, 100));
+            model = activeDartModel();
+        }
+        if (!model) {
+            console.warn("CodeApp Dart LSP: Dart Monaco model did not appear");
             return;
         }
         const root = remoteFileURI(workspaceRoot || remoteFileURI(model.uri.toString()).split("/").slice(0,-1).join("/") || "file:///");
@@ -357,7 +373,7 @@ class MonacoImplementation: NSObject {
         try {
             const result = await request("initialize", {
                 processId:null,
-                clientInfo:{name:"Code App",version:"remote-dart-lsp-v22"},
+                clientInfo:{name:"Code App",version:"remote-dart-lsp-v23"},
                 locale:"en-US",
                 rootPath:null,
                 rootUri:root,
@@ -380,6 +396,7 @@ class MonacoImplementation: NSObject {
             notify("initialized", {});
             initialized = true;
             attachAll();
+            enableDartAutoSuggest();
         } catch (e) {
             console.error("CodeApp remote Dart LSP initialize failed", e);
             initialized = false;
