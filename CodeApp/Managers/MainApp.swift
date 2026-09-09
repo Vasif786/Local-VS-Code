@@ -1335,8 +1335,10 @@ extension MainApp: EditorImplementationDelegate {
             editorURL.pathExtension.lowercased() == "dart",
             workSpaceStorage.remoteConnected
         {
-            DartHybridIntelliSense.shared.scheduleAnalysis(
-                app: self, editorURL: editorURL, content: content)
+            Task { @MainActor in
+                DartHybridIntelliSense.shared.scheduleAnalysis(
+                    app: self, editorURL: editorURL, content: content)
+            }
         }
 
     }
