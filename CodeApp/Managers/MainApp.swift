@@ -394,29 +394,31 @@ class MainApp: ObservableObject {
                 originalContent: diffEditor.compareWith, modifiedContent: diffEditor.content,
                 originalUrl: diffURL.absoluteString, modifiedUrl: diffEditor.url.absoluteString)
         } else {
-            Task {
-                if await monacoInstance.isEditorInDiffMode() {
-                    await monacoInstance.switchToNormalMode()
-                }
-                await monacoInstance.createNewModel(
-                    url: activeTextEditor.url.absoluteString, value: activeTextEditor.content)
+            if await monacoInstance.isEditorInDiffMode() {
+                await monacoInstance.switchToNormalMode()
             }
+            // The model must exist before Dart support is activated. The old
+            // Task-based call raced the activation code, so the Dart model
+            // was often not present when the language/provider script ran.
+            await monacoInstance.createNewModel(
+                url: activeTextEditor.url.absoluteString, value: activeTextEditor.content)
         }
 
-        guard let currentDirectoryURL = workSpaceStorage.currentDirectory._url else {
-            return
-        }
-
-        // Dart/Flutter remote project: use the robust analyzer-backed hybrid.
-        // It does not depend on an interactive LSP shell and never starts a
-        // local Dart analyzer. Monaco gets completion directly; diagnostics
-        // come from `dart analyze` on the SSH host.
-        if !runeStoneEditorEnabled, languageServiceEnabled,
+        // Remote Dart/Flutter support is independent of the generic
+        // language-service preference.  A remote .dart editor must always
+        // activate this feature; otherwise the feature can silently remain
+        // disabled simply because the generic Language Service toggle is off.
+        // Activation is deliberately done before the local-workspace guard.
+        if !runeStoneEditorEnabled,
             activeTextEditor.url.pathExtension.lowercased() == "dart",
             workSpaceStorage.remoteConnected
         {
             await DartHybridIntelliSense.shared.activate(
                 app: self, editorURL: activeTextEditor.url, content: activeTextEditor.content)
+            return
+        }
+
+        guard let currentDirectoryURL = workSpaceStorage.currentDirectory._url else {
             return
         }
 

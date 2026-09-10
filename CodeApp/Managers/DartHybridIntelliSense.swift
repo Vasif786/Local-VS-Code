@@ -534,10 +534,9 @@ final class DartHybridIntelliSense {
     /// the completion provider (no-op if already installed) and requests
     /// markers for the current content immediately, so diagnostics don't
     /// wait for the first edit.
-    func activate(app: MainApp, editorURL: URL, content: String) {
-        Task {
-            guard let monaco = app.monacoInstance as? MonacoImplementation else { return }
-            let uri = Self.jsString(editorURL.absoluteString)
+    func activate(app: MainApp, editorURL: URL, content: String) async {
+        guard let monaco = app.monacoInstance as? MonacoImplementation else { return }
+        let uri = Self.jsString(editorURL.absoluteString)
             // Code App can create remote SFTP models with a generic language id.
             // Force every .dart model to Monaco's Dart language before registering
             // the provider; otherwise Monaco never asks our completion provider.
@@ -552,9 +551,8 @@ final class DartHybridIntelliSense {
             })();
             \(dartCompletionProviderScript)
             """
-            _ = try? await monaco.executeCustomScript(script)
-            _ = try? await monaco.executeCustomScript(Self.autoCompletionTriggerScript)
-        }
+        _ = try? await monaco.executeCustomScript(script)
+        _ = try? await monaco.executeCustomScript(Self.autoCompletionTriggerScript)
         scheduleAnalysis(app: app, editorURL: editorURL, content: content)
     }
 
