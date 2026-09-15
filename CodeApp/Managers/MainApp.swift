@@ -1355,13 +1355,27 @@ extension MainApp: EditorImplementationDelegate {
         activeTextEditor?.currentVersionId = versionID
         activeTextEditor?.content = content
 
-        if let editorURL = activeTextEditor?.url, editorURL.absoluteString == url,
-            editorURL.pathExtension == "dart"
-        {
-            Task { @MainActor in
-                DartHybridIntelliSense.shared.scheduleAnalysis(
-                    app: self, editorURL: editorURL, content: content)
-            }
+        // Monaco may normalize an SFTP URI differently from the URL stored by
+        // the native editor (percent encoding, host casing, trailing slash, etc.).
+        // Do NOT require absoluteString equality here: doing so prevents the
+        // analyzer from ever being scheduled for many remote Dart files.
+        // The callback itself is the source of truth for the currently edited model.
+        guard let editorURL = activeTextEditor?.url, editorURL.pathExtension.lowercased() == "dart" else {
+            return
+        }
+
+        let callbackURL = URL(string: url)
+        let sameFile: Bool = {
+            guard let callbackURL else { return true }
+            if callbackURL.path == editorURL.path { return true }
+            if callbackURL.absoluteString == editorURL.absoluteString { return true }
+            return callbackURL.path.removingPercentEncoding == editorURL.path.removingPercentEncoding
+        }()
+        guard sameFile else { return }
+
+        Task { @MainActor in
+            DartHybridIntelliSense.shared.scheduleAnalysis(
+                app: self, editorURL: editorURL, content: content)
         }
     }
 

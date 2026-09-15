@@ -647,6 +647,7 @@ final class DartHybridIntelliSense {
                     host: connectionInfo.host, authenticationMode: connectionInfo.authenticationMode,
                     command: command)
             } catch {
+                await pushAnalyzerFailureMarker(app: app, editorURL: editorURL, message: "Dart analyzer could not be started: \(error.localizedDescription)")
                 return
             }
 
@@ -716,6 +717,30 @@ final class DartHybridIntelliSense {
                     length: max(length, 1)))
         }
         return results
+    }
+
+    private func pushAnalyzerFailureMarker(app: MainApp, editorURL: URL, message: String) async {
+        guard let monaco = app.monacoInstance as? MonacoImplementation else { return }
+        let msg = Self.jsEscape(message)
+        let uri = Self.jsEscape(editorURL.absoluteString)
+        let path = Self.jsEscape(editorURL.path)
+        let script = """
+        (function() {
+          var model = null;
+          if (typeof editor !== "undefined" && editor.getModel) model = editor.getModel();
+          if (!model) { try { model = monaco.editor.getModel(monaco.Uri.parse("\(uri)")); } catch (_) {} }
+          if (!model) {
+            var all = monaco.editor.getModels();
+            for (var i = 0; i < all.length; i++) {
+              if (all[i].uri.path === \"\(path)\") { model = all[i]; break; }
+            }
+          }
+          if (model) monaco.editor.setModelMarkers(model, "dart-analyzer", [{
+            severity: 8, message: "\(msg)", startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1
+          }]);
+        })();
+        """
+        _ = try? await monaco.executeCustomScript(script)
     }
 
     private func pushMarkers(app: MainApp, editorURL: URL, diagnostics: [DartDiagnostic]) async {
