@@ -534,45 +534,12 @@ final class DartHybridIntelliSense {
     /// the completion provider (no-op if already installed) and requests
     /// markers for the current content immediately, so diagnostics don't
     /// wait for the first edit.
-    func activate(app: MainApp, editorURL: URL, content: String) async {
-        guard let monaco = app.monacoInstance as? MonacoImplementation else { return }
-        let uri = Self.jsString(editorURL.absoluteString)
-            // Code App can create remote SFTP models with a generic language id.
-            // Force every .dart model to Monaco's Dart language before registering
-            // the provider; otherwise Monaco never asks our completion provider.
-            let script = """
-            (function(){
-                var target = \(uri);
-                monaco.editor.getModels().forEach(function(m){
-                    if (m.uri.toString() === target || m.uri.path === new URL(target).pathname || m.uri.path.endsWith(new URL(target).pathname)) {
-                        monaco.editor.setModelLanguage(m, 'dart');
-                    }
-                });
-            })();
-            \(dartCompletionProviderScript)
-            """
-        _ = try? await monaco.executeCustomScript(script)
-        _ = try? await monaco.executeCustomScript(Self.autoCompletionTriggerScript)
+    func activate(app: MainApp, editorURL: URL, content: String) {
+        Task {
+            _ = try? await (app.monacoInstance as? MonacoImplementation)?
+                .executeCustomScript(dartCompletionProviderScript)
+        }
         scheduleAnalysis(app: app, editorURL: editorURL, content: content)
-    }
-
-    private static let autoCompletionTriggerScript = #"""
-    (function(){
-        monaco.editor.getEditors().forEach(function(editor){
-            editor.updateOptions({
-                quickSuggestions:{other:true,comments:false,strings:false},
-                suggestOnTriggerCharacters:true,
-                wordBasedSuggestions:false,
-                suggest:{showMethods:true,showFunctions:true,showConstructors:true,showFields:true,showVariables:true,showClasses:true,showProperties:true,showKeywords:true,showSnippets:true}
-            });
-        });
-    })();
-    """#
-
-    private static func jsString(_ value: String) -> String {
-        let data = try! JSONSerialization.data(withJSONObject: [value])
-        let array = String(data: data, encoding: .utf8)!
-        return String(array.dropFirst().dropLast())
     }
 
     /// Call on every content change for the active file (from
@@ -667,7 +634,7 @@ final class DartHybridIntelliSense {
                 Task { try? await app.workSpaceStorage.removeItem(at: tempURL) }
             }
 
-            let command = "cd \(quotedRoot) && (command -v dart >/dev/null 2>&1 && dart analyze --format=machine \(quotedRelativeTemp) || /data/data/com.termux/files/usr/opt/flutter/bin/dart analyze --format=machine \(quotedRelativeTemp))"
+            let command = "cd \(quotedRoot) && dart analyze --format=machine \(quotedRelativeTemp)"
             let output: String
             do {
                 output = try await OneShotSSHCommandRunner().run(
@@ -683,8 +650,35 @@ final class DartHybridIntelliSense {
             return
         }
 
-        // Dart/Flutter support is REMOTE-ONLY. Never invoke a local Dart analyzer.
-        return
+        // Local project: analyze the unsaved buffer in a hidden temporary file.
+        guard editorURL.isFileURL else { return }
+        let projectRoot = localDartProjectRoot(for: editorURL)
+        let tempURL = editorURL.deletingLastPathComponent()
+            .appendingPathComponent("." + editorURL.deletingPathExtension().lastPathComponent + Self.tempFileSuffix)
+        do {
+            try contentData.write(to: tempURL, options: .atomic)
+            let output = await LocalDartAnalyzeRunner().run(root: projectRoot, file: tempURL)
+            try? FileManager.default.removeItem(at: tempURL)
+            guard generation == self.generation else { return }
+
+            let diagnostics = Self.parseMachineOutput(output, matchingFileSuffix: tempURL.path)
+            await pushMarkers(app: app, editorURL: editorURL, diagnostics: diagnostics)
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+    }
+
+    private func localDartProjectRoot(for fileURL: URL) -> URL {
+        var current = fileURL.deletingLastPathComponent()
+        let fm = FileManager.default
+        while true {
+            if fm.fileExists(atPath: current.appendingPathComponent("pubspec.yaml").path) {
+                return current
+            }
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path { return fileURL.deletingLastPathComponent() }
+            current = parent
+        }
     }
 
     /// Parses `dart analyze --format=machine` output:
@@ -734,8 +728,7 @@ final class DartHybridIntelliSense {
         let script = """
             (function() {
                 var uriString = "\(escapedURI)";
-                var model = null;
-                try { model = monaco.editor.getModel(monaco.Uri.parse(uriString)); } catch (e) {}
+                var model = monaco.editor.getModel(monaco.Uri.parse(uriString));
                 if (!model) {
                     // Fallback: exact string form of the URI Monaco expects can
                     // differ slightly (encoding, trailing slash, etc.) — match
@@ -744,7 +737,7 @@ final class DartHybridIntelliSense {
                     // sometimes never appear at all.
                     var all = monaco.editor.getModels();
                     for (var i = 0; i < all.length; i++) {
-                        if (all[i].uri.toString() === uriString || all[i].uri.path === uriString || all[i].uri.path.endsWith(new URL(uriString).pathname)) {
+                        if (all[i].uri.toString() === uriString || all[i].uri.path === uriString) {
                             model = all[i];
                             break;
                         }

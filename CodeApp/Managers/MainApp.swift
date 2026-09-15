@@ -374,13 +374,6 @@ class MainApp: ObservableObject {
         }
     }
 
-    private func requestInteractiveKeyboard(prompt: String) async -> String {
-        return
-            (try? await authenticationRequestManager.requestPasswordAuthentication(
-                title: "\(prompt)", usernameTitleKey: ""
-            ).0) ?? ""
-    }
-
     private func updateActiveEditor() async {
         guard let activeTextEditor else {
             Task {
@@ -394,31 +387,60 @@ class MainApp: ObservableObject {
                 originalContent: diffEditor.compareWith, modifiedContent: diffEditor.content,
                 originalUrl: diffURL.absoluteString, modifiedUrl: diffEditor.url.absoluteString)
         } else {
-            if await monacoInstance.isEditorInDiffMode() {
-                await monacoInstance.switchToNormalMode()
+            Task {
+                if await monacoInstance.isEditorInDiffMode() {
+                    await monacoInstance.switchToNormalMode()
+                }
+                await monacoInstance.createNewModel(
+                    url: activeTextEditor.url.absoluteString, value: activeTextEditor.content)
             }
-            // The model must exist before Dart support is activated. The old
-            // Task-based call raced the activation code, so the Dart model
-            // was often not present when the language/provider script ran.
-            await monacoInstance.createNewModel(
-                url: activeTextEditor.url.absoluteString, value: activeTextEditor.content)
-        }
-
-        // Remote Dart/Flutter support is independent of the generic
-        // language-service preference.  A remote .dart editor must always
-        // activate this feature; otherwise the feature can silently remain
-        // disabled simply because the generic Language Service toggle is off.
-        // Activation is deliberately done before the local-workspace guard.
-        if !runeStoneEditorEnabled,
-            activeTextEditor.url.pathExtension.lowercased() == "dart",
-            workSpaceStorage.remoteConnected
-        {
-            await DartHybridIntelliSense.shared.activate(
-                app: self, editorURL: activeTextEditor.url, content: activeTextEditor.content)
-            return
         }
 
         guard let currentDirectoryURL = workSpaceStorage.currentDirectory._url else {
+            return
+        }
+
+        // Dart/Flutter in a remote SSH project: handled by the separate
+        // hybrid completion+analyzer system (no LSP, no persistent second
+        // connection) — see DartHybridIntelliSense.swift. Does not touch
+        // the local-file-only Python/Java path below at all. Applies to
+        // any .dart file in the remote project, not just files under lib/.
+        if !runeStoneEditorEnabled, languageServiceEnabled,
+            activeTextEditor.url.pathExtension == "dart"
+        {
+            // Dart gets one unified editing experience in both modes:
+            // - remote/SFTP: analyzer-backed diagnostics + Flutter/Dart completion
+            //   through the existing SSH connection machinery;
+            // - local files: the same analyzer fallback, plus the normal Monaco
+            //   LSP bridge when a Dart SDK is available.
+            await DartHybridIntelliSense.shared.activate(
+                app: self, editorURL: activeTextEditor.url, content: activeTextEditor.content)
+
+            if currentDirectoryURL.isFileURL {
+                // Let the existing Monaco LSP bridge try the real Dart analysis
+                // server as well. If the SDK is not installed, the analyzer
+                // fallback remains harmless and continues to provide diagnostics.
+                Task {
+                    let configuration = LanguageService.configurations.first {
+                        $0.languageIdentifier == "dart"
+                    }
+                    guard let configuration else { return }
+                    let connected = await self.monacoInstance.isLanguageServiceConnected
+                    if connected && LanguageService.shared.candidateLanguageIdentifier == "dart" {
+                        return
+                    }
+                    if connected { self.monacoInstance.disconnectLanguageService() }
+                    LanguageService.shared.candidateLanguageIdentifier = "dart"
+                    self.monacoInstance.connectLanguageService(
+                        serverURL: URL(
+                            string: "ws://127.0.0.1:\(String(AppExtensionService.PORT))/websocket"
+                        )!,
+                        serverArgs: configuration.args,
+                        pwd: currentDirectoryURL,
+                        languageIdentifier: configuration.languageIdentifier
+                    )
+                }
+            }
             return
         }
 
@@ -1334,15 +1356,13 @@ extension MainApp: EditorImplementationDelegate {
         activeTextEditor?.content = content
 
         if let editorURL = activeTextEditor?.url, editorURL.absoluteString == url,
-            editorURL.pathExtension.lowercased() == "dart",
-            workSpaceStorage.remoteConnected
+            editorURL.pathExtension == "dart"
         {
             Task { @MainActor in
                 DartHybridIntelliSense.shared.scheduleAnalysis(
                     app: self, editorURL: editorURL, content: content)
             }
         }
-
     }
 
     func editorImplementation(cursorPositionDidChange line: Int, column: Int) {

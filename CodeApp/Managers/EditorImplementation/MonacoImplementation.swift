@@ -9,7 +9,6 @@ import Foundation
 import GCDWebServers
 import GameController
 import SwiftUI
-import WebKit
 
 class EditorService {
     static let PORT = 20234
@@ -76,7 +75,6 @@ class MonacoImplementation: NSObject {
         if !monacoWebView.isMessageHandlerAdded {
             let contentManager = monacoWebView.configuration.userContentController
             contentManager.add(self, name: "toggleMessageHandler")
-            contentManager.add(self, name: "dartLSPMessageHandler")
             monacoWebView.isMessageHandlerAdded = true
         }
 
@@ -200,308 +198,6 @@ class MonacoImplementation: NSObject {
             )
         }
     }
-    static let remoteDartLSPBridgeScript = #"""
-(function () {
-    if (window.__codeappRemoteDartLSPInstalled) { return; }
-    window.__codeappRemoteDartLSPInstalled = true;
-    const pending = new Map();
-    let nextId = 1;
-    const opened = new Map();
-    let initialized = false;
-
-    function post(payload) {
-        window.webkit.messageHandlers.dartLSPMessageHandler.postMessage({
-            Event: "DartLSP",
-            Payload: JSON.stringify(payload)
-        });
-    }
-    function request(method, params) {
-        return new Promise((resolve, reject) => {
-            const id = nextId++;
-            const timer = setTimeout(() => {
-                if (!pending.has(id)) return;
-                pending.delete(id);
-                reject(new Error("Dart LSP timeout: " + method));
-            }, 15000);
-            pending.set(id, {resolve:(v)=>{clearTimeout(timer);resolve(v)}, reject:(e)=>{clearTimeout(timer);reject(e)}});
-            post({jsonrpc:"2.0", id:id, method:method, params:params});
-        });
-    }
-    function notify(method, params) {
-        post({jsonrpc:"2.0", method:method, params:params});
-    }
-    function remoteFileURI(uri) {
-        try {
-            const u = new URL(uri);
-            if (u.protocol === "file:") return u.toString();
-            if (u.protocol === "sftp:") {
-                return "file://" + encodeURI(decodeURIComponent(u.pathname));
-            }
-        } catch (_) {}
-        return uri;
-    }
-    function modelForURI(uri) {
-        const models = monaco.editor.getModels();
-        for (const m of models) {
-            if (m.uri.toString() === uri) return m;
-            if (remoteFileURI(m.uri.toString()) === uri) return m;
-        }
-        return null;
-    }
-    function markdownValue(value) {
-        if (!value) return "";
-        if (typeof value === "string") return value;
-        if (value.value) return value.value;
-        return String(value);
-    }
-    function lspPosition(position) {
-        return {line: position.lineNumber - 1, character: position.column - 1};
-    }
-    function monacoRange(range) {
-        if (!range) return undefined;
-        return {
-            startLineNumber: range.start.line + 1,
-            startColumn: range.start.character + 1,
-            endLineNumber: range.end.line + 1,
-            endColumn: range.end.character + 1
-        };
-    }
-    function completionKind(k) {
-        const map = {1:17,2:19,3:18,4:1,5:2,6:3,7:4,8:5,9:6,10:7,11:8,12:9,13:10,14:11,15:12,16:13,17:14,18:15,19:16,20:21,21:22,22:23,23:24,24:25};
-        return map[k] || monaco.languages.CompletionItemKind.Text;
-    }
-    function sendDidOpen(model) {
-        if (!initialized || !model || model.getLanguageId() !== "dart") return;
-        const key = model.uri.toString();
-        if (opened.has(key)) return;
-        const uri = remoteFileURI(key);
-        opened.set(key, {version:1});
-        notify("textDocument/didOpen", {
-            textDocument: {uri:uri, languageId:"dart", version:1, text:model.getValue()}
-        });
-    }
-    function attachModel(model) {
-        if (!model || model.getLanguageId() !== "dart") return;
-        sendDidOpen(model);
-        if (model.__codeappDartLSPAttached) return;
-        model.__codeappDartLSPAttached = true;
-        model.onDidChangeContent(function () {
-            const key = model.uri.toString();
-            let state = opened.get(key);
-            if (!state) { sendDidOpen(model); state = opened.get(key); }
-            if (!state) return;
-            state.version += 1;
-            notify("textDocument/didChange", {
-                textDocument:{uri:remoteFileURI(key), version:state.version},
-                contentChanges:[{text:model.getValue()}]
-            });
-        });
-        model.onWillDispose(function () {
-            if (opened.has(key)) {
-                notify("textDocument/didClose", {textDocument:{uri:remoteFileURI(key)}});
-                opened.delete(key);
-            }
-        });
-    }
-    function activeDartModel() {
-        const editors = (typeof monaco.editor.getEditors === "function") ? monaco.editor.getEditors() : [];
-        for (const editor of editors) {
-            const model = editor.getModel();
-            if (model && model.getLanguageId() === "dart") return model;
-        }
-        const models = monaco.editor.getModels();
-        return models.find(m => m.getLanguageId() === "dart") || null;
-    }
-    function attachAll() {
-        monaco.editor.getModels().forEach(attachModel);
-        const current = activeDartModel();
-        if (current) attachModel(current);
-    }
-
-    window.__codeappDartLSPReceive = function (base64) {
-        let message;
-        try { message = JSON.parse(decodeURIComponent(escape(atob(base64)))); } catch (_) { return; }
-        if (message.id !== undefined && pending.has(message.id)) {
-            const p = pending.get(message.id); pending.delete(message.id);
-            if (message.error) p.reject(message.error); else p.resolve(message.result);
-            return;
-        }
-        if (message.method === "textDocument/publishDiagnostics") {
-            const p = message.params || {};
-            const model = modelForURI(p.uri);
-            if (!model) return;
-            const markers = (p.diagnostics || []).map(function(d) {
-                let sev = monaco.MarkerSeverity.Info;
-                if (d.severity === 1) sev = monaco.MarkerSeverity.Error;
-                else if (d.severity === 2) sev = monaco.MarkerSeverity.Warning;
-                else if (d.severity === 3) sev = monaco.MarkerSeverity.Info;
-                else if (d.severity === 4) sev = monaco.MarkerSeverity.Hint;
-                return {
-                    severity:sev,
-                    message:(d.message || "") + (d.code ? " [" + d.code + "]" : ""),
-                    startLineNumber:d.range.start.line + 1,
-                    startColumn:d.range.start.character + 1,
-                    endLineNumber:d.range.end.line + 1,
-                    endColumn:d.range.end.character + 1
-                };
-            });
-            monaco.editor.setModelMarkers(model, "dart-language-server", markers);
-        }
-    };
-    window.__codeappDartLSPStop = function () {
-        initialized = false;
-        pending.forEach(p => p.reject("Dart language server stopped"));
-        pending.clear();
-        monaco.editor.getModels().forEach(m => monaco.editor.setModelMarkers(m, "dart-language-server", []));
-    };
-
-    window.__codeappStartDartLSP = async function (workspaceRoot) {
-        let model = activeDartModel();
-        // createNewModel() is asynchronous in Code App. Do not race it.
-        // Wait briefly for Monaco to publish the Dart model instead of silently
-        // aborting the entire LSP startup.
-        for (let i = 0; !model && i < 40; i++) {
-            await new Promise(r => setTimeout(r, 100));
-            model = activeDartModel();
-        }
-        if (!model) {
-            console.warn("CodeApp Dart LSP: Dart Monaco model did not appear");
-            return;
-        }
-        const root = remoteFileURI(workspaceRoot || remoteFileURI(model.uri.toString()).split("/").slice(0,-1).join("/") || "file:///");
-        initialized = false;
-        try {
-            const result = await request("initialize", {
-                processId:null,
-                clientInfo:{name:"Code App",version:"remote-dart-lsp-v23"},
-                locale:"en-US",
-                rootPath:null,
-                rootUri:root,
-                workspaceFolders:[{uri:root,name:"Flutter Project"}],
-                initializationOptions:{},
-                capabilities:{
-                    general:{positionEncodings:["utf-16"]},
-                    textDocument:{
-                        synchronization:{dynamicRegistration:false,willSave:false,willSaveWaitUntil:false,didSave:true},
-                        completion:{dynamicRegistration:false,completionItem:{snippetSupport:true,documentationFormat:["markdown","plaintext"],resolveSupport:{properties:["documentation","detail"]}}},
-                        hover:{dynamicRegistration:false,contentFormat:["markdown","plaintext"]},
-                        signatureHelp:{dynamicRegistration:false,signatureInformation:{documentationFormat:["markdown","plaintext"]}},
-                        publishDiagnostics:{relatedInformation:true,codeDescriptionSupport:true},
-                        codeAction:{dynamicRegistration:false,codeActionLiteralSupport:{codeActionKind:{valueSet:["quickfix","refactor","refactor.rewrite","source","source.organizeImports"]}}}
-                    },
-                    workspace:{applyEdit:true,workspaceEdit:{documentChanges:true},workspaceFolders:true,configuration:true}
-                }
-            });
-            console.log("CodeApp Dart LSP initialized", result);
-            notify("initialized", {});
-            initialized = true;
-            attachAll();
-            enableDartAutoSuggest();
-        } catch (e) {
-            console.error("CodeApp remote Dart LSP initialize failed", e);
-            initialized = false;
-        }
-    };
-
-    monaco.languages.registerCompletionItemProvider("dart", {
-        triggerCharacters:[".",":","("," "],
-        provideCompletionItems: async function(model, position) {
-            attachModel(model);
-            if (!initialized) return {suggestions:[]};
-            try {
-                const result = await request("textDocument/completion", {
-                    textDocument:{uri:remoteFileURI(model.uri.toString())},
-                    position:lspPosition(position),
-                    context:{triggerKind:1}
-                });
-                const items = Array.isArray(result) ? result : ((result && result.items) || []);
-                const word = model.getWordUntilPosition(position);
-                const range = {startLineNumber:position.lineNumber,endLineNumber:position.lineNumber,startColumn:word.startColumn,endColumn:position.column};
-                return {suggestions:items.map(function(item) {
-                    const text = item.textEdit && item.textEdit.newText ? item.textEdit.newText : (item.insertText || item.label);
-                    return {
-                        label:item.label,
-                        kind:completionKind(item.kind),
-                        detail:item.detail || "",
-                        documentation:markdownValue(item.documentation),
-                        sortText:item.sortText,
-                        filterText:item.filterText,
-                        insertText:text,
-                        insertTextRules:item.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
-                        range:item.textEdit && item.textEdit.range ? monacoRange(item.textEdit.range) : range
-                    };
-                })};
-            } catch (_) { return {suggestions:[]}; }
-        }
-    });
-
-    // Ask Monaco to show completion while typing, like an IDE. The provider
-    // remains LSP-backed; no local/fake Dart completion list is used.
-    function enableDartAutoSuggest() {
-        monaco.editor.getEditors().forEach(function(editor) {
-            editor.updateOptions({
-                quickSuggestions:{other:true,comments:false,strings:false},
-                suggestOnTriggerCharacters:true,
-                suggest:{showMethods:true,showFunctions:true,showConstructors:true,showFields:true,showVariables:true,showClasses:true,showStructs:true,showInterfaces:true,showModules:true,showProperties:true,showKeywords:true,showSnippets:true}
-            });
-        });
-    }
-    setTimeout(enableDartAutoSuggest, 500);
-
-    monaco.languages.registerHoverProvider("dart", {
-        provideHover: async function(model, position) {
-            attachModel(model);
-            if (!initialized) return null;
-            try {
-                const result = await request("textDocument/hover", {textDocument:{uri:remoteFileURI(model.uri.toString())},position:lspPosition(position)});
-                if (!result) return null;
-                const contents = Array.isArray(result.contents) ? result.contents : [result.contents];
-                return {range:monacoRange(result.range),contents:contents.map(c => ({value:markdownValue(c)}))};
-            } catch (_) { return null; }
-        }
-    });
-
-    monaco.languages.registerSignatureHelpProvider("dart", {
-        signatureHelpTriggerCharacters:["(",","],
-        provideSignatureHelp: async function(model, position) {
-            if (!initialized) return null;
-            try {
-                const result = await request("textDocument/signatureHelp", {textDocument:{uri:remoteFileURI(model.uri.toString())},position:lspPosition(position),context:{triggerKind:1}});
-                if (!result) return null;
-                return {value:{signatures:(result.signatures||[]).map(s => ({label:s.label,documentation:markdownValue(s.documentation),parameters:(s.parameters||[]).map(p => ({label:p.label,documentation:markdownValue(p.documentation)}))})),activeSignature:result.activeSignature||0,activeParameter:result.activeParameter||0},dispose:function(){}};
-            } catch (_) { return null; }
-        }
-    });
-
-    monaco.languages.registerCodeActionProvider("dart", {
-        provideCodeActions: async function(model, range, context) {
-            if (!initialized) return {actions:[],dispose:function(){}};
-            try {
-                const result = await request("textDocument/codeAction", {
-                    textDocument:{uri:remoteFileURI(model.uri.toString())},
-                    range:{start:lspPosition({lineNumber:range.startLineNumber,column:range.startColumn}),end:lspPosition({lineNumber:range.endLineNumber,column:range.endColumn})},
-                    context:{diagnostics:(context.markers||[]).map(m => ({range:{start:{line:m.startLineNumber-1,character:m.startColumn-1},end:{line:m.endLineNumber-1,character:m.endColumn-1}},message:m.message,severity:m.severity}))}
-                });
-                const actions = (result||[]).filter(a => a && a.title).map(a => {
-                    const action = {title:a.title,kind:a.kind || "quickfix",diagnostics:context.markers||[]};
-                    if (a.edit && a.edit.changes) {
-                        action.edit = {edits:[]};
-                        Object.keys(a.edit.changes).forEach(uri => {
-                            (a.edit.changes[uri]||[]).forEach(e => action.edit.edits.push({resource:monaco.Uri.parse(uri),edit:{range:monacoRange(e.range),text:e.newText}}));
-                        });
-                    }
-                    return action;
-                });
-                return {actions:actions,dispose:function(){}};
-            } catch (_) { return {actions:[],dispose:function(){}}; }
-        }
-    });
-
-    const oldModelChanged = monaco.editor.onDidChangeModel;
-    monaco.editor.onDidChangeModel(function() { attachAll(); });
-    setTimeout(attachAll, 250);
-})();
-"""#
 }
 
 extension MonacoImplementation: WKScriptMessageHandler {
@@ -515,9 +211,6 @@ extension MonacoImplementation: WKScriptMessageHandler {
         }
 
         switch event {
-        case "DartLSP":
-            guard let payload = result["Payload"] as? String else { return }
-            RemoteDartLanguageServer.shared.send(json: payload)
         case "focus":
             delegate?.didEnterFocus()
         case "Request Diff Update":
@@ -766,63 +459,12 @@ extension MonacoImplementation: EditorImplementation {
     }
 
     /// Runs arbitrary JS in the Monaco WebView. Used only by the Dart
-    /// Execute a custom Monaco script. Used by editor integrations; Dart
-    /// completion/diagnostics themselves are provided by the remote LSP bridge.
+    /// hybrid IntelliSense feature (see DartHybridIntelliSense.swift) to
+    /// install its completion provider and push diagnostics — kept
+    /// separate from the LSP-specific methods below so it can't affect
+    /// Python/Java or any other language's behavior.
     func executeCustomScript(_ script: String) async throws -> Any? {
         try await monacoWebView.evaluateJavaScriptAsync(script)
-    }
-
-    /// Installs the native bridge used by the remote Dart analysis server.
-    /// This is intentionally independent of the old local LSP bridge.
-    func installRemoteDartLanguageServerBridge() async {
-        for _ in 0..<5 {
-            do {
-                let result = try await monacoWebView.evaluateJavaScriptAsync(Self.remoteDartLSPBridgeScript)
-                if result != nil || true { return }
-            } catch {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-        }
-    }
-
-    func startRemoteDartLanguageServer(
-        workspaceRoot: String,
-        host: URL,
-        authenticationMode: RemoteAuthenticationMode,
-        onRequestInteractiveKeyboard: @escaping (String) async -> String
-    ) async {
-        await installRemoteDartLanguageServerBridge()
-        RemoteDartLanguageServer.shared.start(
-            host: host,
-            authenticationMode: authenticationMode,
-            onRequestInteractiveKeyboard: onRequestInteractiveKeyboard,
-            receiver: { [weak self] message in
-                guard let self, let data = message.data(using: .utf8) else { return }
-                let encoded = data.base64EncodedString()
-                Task { @MainActor in
-                    _ = try? await self.monacoWebView.evaluateJavaScriptAsync(
-                        "window.__codeappDartLSPReceive('\(encoded)')")
-                }
-            },
-            onReady: { [weak self] in
-                guard let self else { return }
-                Task { @MainActor in
-                    await self.installRemoteDartLanguageServerBridge()
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    let root = workspaceRoot.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
-                    _ = try? await self.monacoWebView.evaluateJavaScriptAsync(
-                        "window.__codeappStartDartLSP && window.__codeappStartDartLSP('\(root)')")
-                }
-            })
-    }
-
-    func sendRemoteDartLSPMessage(_ json: String) {
-        RemoteDartLanguageServer.shared.send(json: json)
-    }
-
-    func stopRemoteDartLanguageServer() {
-        RemoteDartLanguageServer.shared.stop()
-        Task { try? await monacoWebView.evaluateJavaScriptAsync("window.__codeappDartLSPStop && window.__codeappDartLSPStop()") }
     }
 
     func connectLanguageService(
