@@ -405,7 +405,7 @@ class MainApp: ObservableObject {
         // connection) — see DartHybridIntelliSense.swift. Does not touch
         // the local-file-only Python/Java path below at all. Applies to
         // any .dart file in the remote project, not just files under lib/.
-        if !runeStoneEditorEnabled, languageServiceEnabled,
+        if !runeStoneEditorEnabled,
             activeTextEditor.url.pathExtension == "dart"
         {
             // Dart gets one unified editing experience in both modes:

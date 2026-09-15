@@ -628,8 +628,14 @@ final class DartHybridIntelliSense {
             let quotedRoot = "'" + rootPath.replacingOccurrences(of: "'", with: "'\\''") + "'"
             let quotedRelativeTemp = "'" + relativeTempPath.replacingOccurrences(of: "'", with: "'\\''") + "'"
 
-            try? await app.workSpaceStorage.write(
-                at: tempURL, content: contentData, atomically: true, overwrite: true)
+            do {
+                try await app.workSpaceStorage.write(
+                    at: tempURL, content: contentData, atomically: true, overwrite: true)
+            } catch {
+                // Do not silently continue with a temp file that was never written.
+                // The editor must never show stale/incorrect diagnostics.
+                return
+            }
             defer {
                 Task { try? await app.workSpaceStorage.removeItem(at: tempURL) }
             }
@@ -719,30 +725,43 @@ final class DartHybridIntelliSense {
             let escapedMessage = Self.jsEscape(d.message)
             return """
                 {"severity":\(d.severity.monacoValue),"message":"\(escapedMessage)",\
-                "startLineNumber":\(d.line),"startColumn":\(d.column),\
-                "endLineNumber":\(d.line),"endColumn":\(d.column + d.length)}
+                "startLineNumber":\(d.line),"startColumn":\(max(d.column, 1)),\
+                "endLineNumber":\(d.line),"endColumn":\(max(d.column, 1) + max(d.length, 1))}
                 """
         }.joined(separator: ",")
 
         let escapedURI = Self.jsEscape(editorURL.absoluteString)
+        let escapedPath = Self.jsEscape(editorURL.path)
         let script = """
             (function() {
                 var uriString = "\(escapedURI)";
-                var model = monaco.editor.getModel(monaco.Uri.parse(uriString));
+                var pathString = "\(escapedPath)";
+                var model = null;
+
+                // For SSH/SFTP documents, the URL used by Swift and the URI
+                // Monaco normalizes internally are not always byte-for-byte
+                // identical. Prefer the currently visible editor model first:
+                // this is the file whose unsaved buffer was just analyzed.
+                if (typeof editor !== "undefined" && editor.getModel) {
+                    model = editor.getModel();
+                }
+
                 if (!model) {
-                    // Fallback: exact string form of the URI Monaco expects can
-                    // differ slightly (encoding, trailing slash, etc.) — match
-                    // against every open model's own URI string instead of
-                    // failing silently, which was causing diagnostics to
-                    // sometimes never appear at all.
+                    try { model = monaco.editor.getModel(monaco.Uri.parse(uriString)); } catch (_) {}
+                }
+
+                if (!model) {
                     var all = monaco.editor.getModels();
                     for (var i = 0; i < all.length; i++) {
-                        if (all[i].uri.toString() === uriString || all[i].uri.path === uriString) {
+                        var u = all[i].uri;
+                        if (u.toString() === uriString || u.path === pathString ||
+                            u.toString().indexOf(uriString) >= 0 || uriString.indexOf(u.toString()) >= 0) {
                             model = all[i];
                             break;
                         }
                     }
                 }
+
                 if (!model) { return; }
                 monaco.editor.setModelMarkers(model, "dart-analyzer", [\(markersJSON)]);
             })();
