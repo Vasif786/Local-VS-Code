@@ -671,7 +671,7 @@ final class OneShotSSHCommandRunner: NSObject, NMSSHChannelDelegate {
 /// normal Monaco LSP bridge is also allowed to connect to `dart language-server`
 /// when the SDK is available.
 private final class LocalDartAnalyzeRunner {
-    func run(root: URL, file: URL) async -> String {
+    func run(root: URL, file: URL, useFlutter: Bool) async -> String {
         await withCheckedContinuation { continuation in
             var output = ""
             let executor = Executor(
@@ -684,8 +684,9 @@ private final class LocalDartAnalyzeRunner {
 
             let quotedRoot = Self.shellQuoted(root.path)
             let quotedFile = Self.shellQuoted(file.path)
+            let analyzeCommand = useFlutter ? "flutter analyze --machine" : "dart analyze --format=machine"
             executor.dispatch(
-                command: "cd \(quotedRoot) && dart analyze --format=machine \(quotedFile)"
+                command: "cd \(quotedRoot) && \(analyzeCommand) \(quotedFile) 2>&1"
             ) { _ in
                 continuation.resume(returning: output)
             }
@@ -870,7 +871,9 @@ final class DartHybridIntelliSense {
                 Task { try? await app.workSpaceStorage.removeItem(at: tempURL) }
             }
 
-            let command = "cd \(quotedRoot) && dart analyze --format=machine \(quotedRelativeTemp)"
+            let useFlutterAnalyze = Self.isInLibFolder(projectRoot: projectRoot, fileURL: editorURL)
+            let analyzeCommand = useFlutterAnalyze ? "flutter analyze --machine" : "dart analyze --format=machine"
+            let command = "cd \(quotedRoot) && \(analyzeCommand) \(quotedRelativeTemp) 2>&1"
             let output: String
             do {
                 output = try await OneShotSSHCommandRunner().run(
@@ -883,6 +886,13 @@ final class DartHybridIntelliSense {
 
             guard generation == self.generation else { return }
             let diagnostics = Self.parseMachineOutput(output, matchingFileSuffix: relativeTempPath)
+            if diagnostics.isEmpty, let reason = Self.analyzerFailureReason(from: output) {
+                await pushAnalyzerFailureMarker(
+                    app: app, editorURL: editorURL,
+                    message: "\(useFlutterAnalyze ? "flutter analyze" : "dart analyze") did not run cleanly: \(reason)"
+                )
+                return
+            }
             await pushMarkers(app: app, editorURL: editorURL, diagnostics: diagnostics)
             return
         }
@@ -890,15 +900,24 @@ final class DartHybridIntelliSense {
         // Local project: analyze the unsaved buffer in a hidden temporary file.
         guard editorURL.isFileURL else { return }
         let projectRoot = localDartProjectRoot(for: editorURL)
+        let useFlutterAnalyze = Self.isInLibFolder(projectRoot: projectRoot, fileURL: editorURL)
         let tempURL = editorURL.deletingLastPathComponent()
             .appendingPathComponent("." + editorURL.deletingPathExtension().lastPathComponent + Self.tempFileSuffix)
         do {
             try contentData.write(to: tempURL, options: .atomic)
-            let output = await LocalDartAnalyzeRunner().run(root: projectRoot, file: tempURL)
+            let output = await LocalDartAnalyzeRunner().run(
+                root: projectRoot, file: tempURL, useFlutter: useFlutterAnalyze)
             try? FileManager.default.removeItem(at: tempURL)
             guard generation == self.generation else { return }
 
             let diagnostics = Self.parseMachineOutput(output, matchingFileSuffix: tempURL.path)
+            if diagnostics.isEmpty, let reason = Self.analyzerFailureReason(from: output) {
+                await pushAnalyzerFailureMarker(
+                    app: app, editorURL: editorURL,
+                    message: "\(useFlutterAnalyze ? "flutter analyze" : "dart analyze") did not run cleanly: \(reason)"
+                )
+                return
+            }
             await pushMarkers(app: app, editorURL: editorURL, diagnostics: diagnostics)
         } catch {
             try? FileManager.default.removeItem(at: tempURL)
@@ -947,6 +966,49 @@ final class DartHybridIntelliSense {
                     column: column, length: max(length, 1)))
         }
         return results
+    }
+
+    /// True when the file sits inside the project's `lib/` folder,
+    /// relative to `projectRoot` — the convention Flutter app source lives
+    /// under. Per feature request: these files are analyzed with `flutter
+    /// analyze` rather than plain `dart analyze`, since it also runs
+    /// Flutter-specific lints/checks that `dart analyze` alone does not.
+    /// Files elsewhere in the project (`bin/`, `test/`, etc.) keep using
+    /// `dart analyze`.
+    private static func isInLibFolder(projectRoot: URL, fileURL: URL) -> Bool {
+        let rootPath = projectRoot.path.hasSuffix("/") ? projectRoot.path : projectRoot.path + "/"
+        guard fileURL.path.hasPrefix(rootPath) else { return false }
+        let relative = fileURL.path.dropFirst(rootPath.count)
+        return relative == "lib" || relative.hasPrefix("lib/")
+    }
+
+    /// When machine-format parsing finds zero diagnostics, decides whether
+    /// that's a genuinely clean file (nothing to show — `dart
+    /// analyze`/`flutter analyze --machine` print nothing when there's
+    /// nothing to report) or the analyze command itself failing to run
+    /// (SDK/PATH issue, no pubspec, packages not resolved, analyzer
+    /// crash...) — in which case the raw output IS the reason and must be
+    /// shown, never silently swallowed into a false "no problems" state.
+    ///
+    /// This is a heuristic (keyword match on the combined stdout+stderr
+    /// text), not a real exit-code check, because the SSH/local runners
+    /// here don't currently plumb the process exit code back — see
+    /// `OneShotSSHCommandRunner`'s marker line, which already carries the
+    /// exit code in the output stream but isn't parsed out yet. Erring
+    /// toward "not a failure" on ambiguous chatter (e.g. first-run SDK
+    /// precache messages) avoids false failure markers on working code.
+    private static func analyzerFailureReason(from output: String) -> String? {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let lower = trimmed.lowercased()
+        if lower.contains("no issues found") { return nil }
+        let errorSignals = [
+            "command not found", "not found", "no pubspec.yaml", "no pubspec file",
+            "error:", "exception", "fatal", "unable to", "failed", "cannot find",
+            "not recognized", "permission denied",
+        ]
+        guard errorSignals.contains(where: { lower.contains($0) }) else { return nil }
+        return String(trimmed.prefix(500))
     }
 
     private func pushAnalyzerFailureMarker(app: MainApp, editorURL: URL, message: String) async {
