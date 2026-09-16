@@ -1242,7 +1242,7 @@ final class DartHybridIntelliSense {
                 }
                 components.path = path
                 if let url = components.url {
-                    app.openFile(url: url)
+                    _ = try? await app.openFile(url: url)
                 }
                 await self.resolveBridgeRequest(id: id, result: ["ok": true])
             default:

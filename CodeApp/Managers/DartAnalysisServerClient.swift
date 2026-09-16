@@ -256,7 +256,7 @@ final class LSPMessageFramer {
             guard
                 let separatorRange = buffer.range(
                     of: Data("\r\n\r\n".utf8), options: [],
-                    range: headerRange.upperBound..<buffer.endIndex)
+                    in: headerRange.upperBound..<buffer.endIndex)
             else {
                 break  // header started but not finished yet
             }
