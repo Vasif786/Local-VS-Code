@@ -74,12 +74,15 @@ enum DartSDKLocator {
 
     enum LocatorError: LocalizedError {
         case connectFailed
+        case detectionFailed(String)
         case notFound(path: String)
 
         var errorDescription: String? {
             switch self {
             case .connectFailed:
                 return "Could not connect over SSH to detect the Dart SDK."
+            case .detectionFailed(let reason):
+                return "Could not detect the Dart SDK: \(reason)"
             case .notFound(let path):
                 return
                     "'dart' was not found on the remote host (checked PATH and common Flutter install locations). PATH: \(path)"
@@ -115,7 +118,9 @@ enum DartSDKLocator {
         do {
             output = try await OneShotSSHCommandRunner().run(
                 host: host, authenticationMode: authenticationMode, command: command,
-                timeoutSeconds: 15)
+                timeoutSeconds: 20)
+        } catch let runnerError as OneShotSSHCommandRunner.RunnerError {
+            throw LocatorError.detectionFailed(runnerError.localizedDescription)
         } catch {
             throw LocatorError.connectFailed
         }

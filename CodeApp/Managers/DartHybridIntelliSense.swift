@@ -589,9 +589,21 @@ final class OneShotSSHCommandRunner: NSObject, NMSSHChannelDelegate {
     private var continuation: CheckedContinuation<String, Error>?
     private var marker: String = ""
 
-    enum RunnerError: Error { case connectFailed, timedOut }
+    enum RunnerError: LocalizedError {
+        case connectFailed
+        case timedOut(seconds: Double)
 
-    func run(host: URL, authenticationMode: RemoteAuthenticationMode, command: String, timeoutSeconds: Double = 15)
+        var errorDescription: String? {
+            switch self {
+            case .connectFailed:
+                return "Could not connect over SSH."
+            case .timedOut(let seconds):
+                return "Timed out after \(Int(seconds))s waiting for the command to finish."
+            }
+        }
+    }
+
+    func run(host: URL, authenticationMode: RemoteAuthenticationMode, command: String, timeoutSeconds: Double = 30)
         async throws -> String
     {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
@@ -600,7 +612,7 @@ final class OneShotSSHCommandRunner: NSObject, NMSSHChannelDelegate {
             self.marker = "__DARTANALYZE_DONE__\(token)__"
 
             queue.asyncAfter(deadline: .now() + timeoutSeconds) { [weak self] in
-                self?.finish(.failure(RunnerError.timedOut))
+                self?.finish(.failure(RunnerError.timedOut(seconds: timeoutSeconds)))
             }
 
             queue.async { [weak self] in
@@ -889,7 +901,7 @@ final class DartHybridIntelliSense {
             do {
                 output = try await OneShotSSHCommandRunner().run(
                     host: connectionInfo.host, authenticationMode: connectionInfo.authenticationMode,
-                    command: command)
+                    command: command, timeoutSeconds: useFlutterAnalyze ? 90 : 30)
             } catch {
                 await pushAnalyzerFailureMarker(app: app, editorURL: editorURL, message: "Dart analyzer could not be started: \(error.localizedDescription)")
                 return
