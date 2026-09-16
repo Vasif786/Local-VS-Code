@@ -1370,7 +1370,12 @@ extension MainApp: EditorImplementationDelegate {
             guard let callbackURL else { return true }
             if callbackURL.path == editorURL.path { return true }
             if callbackURL.absoluteString == editorURL.absoluteString { return true }
-            return callbackURL.path.removingPercentEncoding == editorURL.path.removingPercentEncoding
+            if let decodedCallback = callbackURL.path.removingPercentEncoding,
+                let decodedEditor = editorURL.path.removingPercentEncoding
+            {
+                return decodedCallback == decodedEditor
+            }
+            return false
         }()
         guard sameFile else { return }
 
