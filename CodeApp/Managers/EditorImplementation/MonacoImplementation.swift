@@ -260,6 +260,8 @@ extension MonacoImplementation: WKScriptMessageHandler {
         case "Language Server Connection Dropped":
             let languageIdentifier = result["languageIdentifier"] as! String
             delegate?.editorImplementation(languageServerDidDisconnect: languageIdentifier)
+        case "Dart LSP Request":
+            DartHybridIntelliSense.shared.handleBridgeRequest(result)
         default:
             print("[MonacoImplementation]: Event '\(event)' not handled.")
         }

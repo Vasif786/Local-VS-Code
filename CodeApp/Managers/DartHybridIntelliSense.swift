@@ -297,6 +297,34 @@ private let dartCompletionProviderScript = #"""
     monaco.languages.registerCompletionItemProvider('dart', {
         triggerCharacters: ['.', ':', ' '],
         provideCompletionItems: function (model, position) {
+            if (window.__dartLSPConnected) {
+                return dartBridgeRequest('completion', {
+                    uri: model.uri.toString(), line: position.lineNumber - 1, character: position.column - 1
+                }).then(function (lspItems) {
+                    if (lspItems && lspItems.length) {
+                        var wi = model.getWordUntilPosition(position);
+                        var r = {
+                            startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
+                            startColumn: wi.startColumn, endColumn: wi.endColumn
+                        };
+                        return {
+                            suggestions: lspItems.map(function (it) {
+                                return {
+                                    label: it.label, kind: kindOf(lspKindName(it.kind)),
+                                    detail: it.detail || "", documentation: it.documentation || "",
+                                    insertText: it.insertText || it.label, range: r
+                                };
+                            })
+                        };
+                    }
+                    return provideCompletionItemsLocal(model, position);
+                });
+            }
+            return provideCompletionItemsLocal(model, position);
+        }
+    });
+
+    function provideCompletionItemsLocal(model, position) {
             if (model.getLanguageId() !== 'dart' && !/\.dart$/.test(model.uri.path || '')) {
                 return { suggestions: [] };
             }
@@ -345,6 +373,143 @@ private let dartCompletionProviderScript = #"""
                 .concat(TOP_LEVEL)
                 .concat(FLUTTER_WIDGETS);
             return { suggestions: all.map(function (s) { return toSuggestion(s, range); }) };
+    }
+
+    // --- LSP bridge helpers (native Dart Analysis Server over SSH) ---
+    // Swift populates window.__dartLSPConnected via executeCustomScript
+    // whenever DartAnalysisServerClient's status changes; everything below
+    // no-ops immediately (no round trip, no delay) while it's false, so a
+    // remote project without a working Dart SDK behaves exactly as before.
+    window.__dartLSPConnected = window.__dartLSPConnected || false;
+    window.__dartBridgePending = window.__dartBridgePending || {};
+    window.__dartBridgeRequestId = window.__dartBridgeRequestId || 0;
+
+    window.__dartBridgeResolve = function (id, resultJSON) {
+        var entry = window.__dartBridgePending[id];
+        if (!entry) { return; }
+        delete window.__dartBridgePending[id];
+        var parsed = null;
+        try { parsed = resultJSON ? JSON.parse(resultJSON) : null; } catch (e) { parsed = null; }
+        entry(parsed);
+    };
+
+    function dartBridgeRequest(kind, payload) {
+        return new Promise(function (resolve) {
+            var id = ++window.__dartBridgeRequestId;
+            window.__dartBridgePending[id] = resolve;
+            try {
+                window.webkit.messageHandlers.toggleMessageHandler.postMessage({
+                    Event: "Dart LSP Request", id: id, kind: kind, payload: payload
+                });
+            } catch (e) {
+                delete window.__dartBridgePending[id];
+                resolve(null);
+                return;
+            }
+            // Second safety net beyond the native side always resolving:
+            // never leave a Monaco provider's promise hanging.
+            setTimeout(function () {
+                if (window.__dartBridgePending[id]) {
+                    delete window.__dartBridgePending[id];
+                    resolve(null);
+                }
+            }, 8000);
+        });
+    }
+
+    // LSP CompletionItemKind (numeric) -> the string names `kindOf` above
+    // already knows how to map to monaco.languages.CompletionItemKind.
+    function lspKindName(n) {
+        switch (n) {
+            case 2: return "Method";
+            case 3: return "Function";
+            case 4: return "Constructor";
+            case 7: return "Class";
+            case 10: return "Property";
+            case 14: return "Keyword";
+            default: return "Text";
+        }
+    }
+
+    monaco.languages.registerHoverProvider('dart', {
+        provideHover: function (model, position) {
+            if (!window.__dartLSPConnected) { return null; }
+            return dartBridgeRequest('hover', {
+                uri: model.uri.toString(), line: position.lineNumber - 1, character: position.column - 1
+            }).then(function (result) {
+                if (!result || !result.contents) { return null; }
+                return { contents: [{ value: String(result.contents) }] };
+            });
+        }
+    });
+
+    monaco.languages.registerDefinitionProvider('dart', {
+        provideDefinition: function (model, position) {
+            if (!window.__dartLSPConnected) { return null; }
+            return dartBridgeRequest('definition', {
+                uri: model.uri.toString(), line: position.lineNumber - 1, character: position.column - 1
+            }).then(function (result) {
+                if (!result || !result.length) { return []; }
+                var loc = result[0];
+                var targetUri = monaco.Uri.parse(loc.uri);
+                var existingModel = monaco.editor.getModel(targetUri);
+                if (existingModel) {
+                    return [{
+                        uri: targetUri,
+                        range: { startLineNumber: loc.line, startColumn: loc.column, endLineNumber: loc.line, endColumn: loc.column }
+                    }];
+                }
+                // Target file isn't open as a tab/model yet — ask native
+                // to open it (Cmd/Ctrl+Click across files), then briefly
+                // poll for the model to appear before giving up.
+                return dartBridgeRequest('openFile', { path: targetUri.path }).then(function () {
+                    return new Promise(function (resolve) {
+                        var attempts = 0;
+                        var iv = setInterval(function () {
+                            attempts++;
+                            var m = monaco.editor.getModel(targetUri);
+                            if (m || attempts > 20) {
+                                clearInterval(iv);
+                                resolve(m ? [{
+                                    uri: targetUri,
+                                    range: { startLineNumber: loc.line, startColumn: loc.column, endLineNumber: loc.line, endColumn: loc.column }
+                                }] : []);
+                            }
+                        }, 150);
+                    });
+                });
+            });
+        }
+    });
+
+    monaco.languages.registerCodeActionProvider('dart', {
+        provideCodeActions: function (model, range, context) {
+            if (!window.__dartLSPConnected) { return { actions: [], dispose: function () {} }; }
+            var diagnosticMessages = (context.markers || []).map(function (m) { return m.message; });
+            return dartBridgeRequest('codeAction', {
+                uri: model.uri.toString(),
+                startLine: range.startLineNumber - 1, startCharacter: range.startColumn - 1,
+                endLine: range.endLineNumber - 1, endCharacter: range.endColumn - 1,
+                diagnosticMessages: diagnosticMessages
+            }).then(function (result) {
+                var actions = (result || []).map(function (action) {
+                    var edits = (action.edits || []).map(function (e) {
+                        return {
+                            resource: model.uri,
+                            textEdit: {
+                                range: {
+                                    startLineNumber: e.startLine, startColumn: e.startColumn,
+                                    endLineNumber: e.endLine, endColumn: e.endColumn
+                                },
+                                text: e.newText
+                            },
+                            versionId: model.getVersionId()
+                        };
+                    });
+                    return { title: action.title, kind: 'quickfix', edit: { edits: edits }, isPreferred: false };
+                });
+                return { actions: actions, dispose: function () {} };
+            });
         }
     });
 })();
@@ -369,11 +534,32 @@ private enum DartAnalyzeSeverity: String {
 }
 
 private struct DartDiagnostic {
-    let severity: DartAnalyzeSeverity
+    /// A monaco.MarkerSeverity value directly (Hint=1, Info=2, Warning=4,
+    /// Error=8) rather than `DartAnalyzeSeverity`, so diagnostics coming
+    /// from the LSP bridge (DartAnalysisServerClient, which has its own
+    /// severity numbering) can be pushed through the exact same
+    /// `pushMarkers` used by the one-shot `dart analyze` path below.
+    let monacoSeverity: Int
     let message: String
     let line: Int
     let column: Int
     let length: Int
+    /// Only populated by the LSP bridge, which reports a real end
+    /// position (possibly on a different line). The one-shot `dart
+    /// analyze --format=machine` path only reports a length, so it leaves
+    /// these nil and `pushMarkers` falls back to `line`/`column + length`.
+    let endLine: Int?
+    let endColumn: Int?
+
+    init(monacoSeverity: Int, message: String, line: Int, column: Int, length: Int, endLine: Int? = nil, endColumn: Int? = nil) {
+        self.monacoSeverity = monacoSeverity
+        self.message = message
+        self.line = line
+        self.column = column
+        self.length = length
+        self.endLine = endLine
+        self.endColumn = endColumn
+    }
 }
 
 /// Runs one command over a short-lived, dedicated SSH session (connect →
@@ -381,7 +567,7 @@ private struct DartDiagnostic {
 /// terminal — NMSSH's own docs say its classes aren't safe to use
 /// concurrently from different threads, and the terminal's channel is a
 /// PTY, unsuitable for machine-readable output anyway.
-private final class OneShotSSHCommandRunner: NSObject, NMSSHChannelDelegate {
+final class OneShotSSHCommandRunner: NSObject, NMSSHChannelDelegate {
     private var session: NMSSHSession?
     /// Shared (not per-instance) on purpose: even though the coordinator
     /// above already limits analysis to one at a time, this guarantees
@@ -530,16 +716,50 @@ final class DartHybridIntelliSense {
     /// with stale markers.
     private var generation = 0
 
+    // MARK: LSP bridge coordinator state (DartAnalysisServerClient.swift)
+
+    /// The active persistent connection to the remote Dart Analysis
+    /// Server, if any. nil until SDK detection + connect succeeds for the
+    /// current remote host/project; torn down and rebuilt whenever the
+    /// host or project root changes, or the SSH link drops.
+    private var lspClient: DartAnalysisServerClient?
+    /// Fingerprint of what `lspClient` is currently connected to
+    /// ("<host>|<projectRootPath>"), used to detect when a fresh
+    /// connection is needed instead of reusing the existing one.
+    private var lspConnectionKey: String?
+    /// LSP document URI ("file://<remote path>") -> the editor URL
+    /// (sftp://...) it corresponds to, so incoming `publishDiagnostics`
+    /// notifications route back to the right Monaco model. Populated by
+    /// `didOpen`; not cleaned up on tab close (see file header note in
+    /// DartAnalysisServerClient.swift).
+    private var lspOpenDocuments: [String: URL] = [:]
+    /// Needed because bridge requests from Monaco (hover/definition/
+    /// completion/code actions) arrive asynchronously via the WKWebView
+    /// message handler, without an `app` parameter to hand them — unlike
+    /// every other entry point in this file, which always receives one.
+    private weak var activeApp: MainApp?
+
     /// Call when a remote `.dart` file becomes the active editor. Installs
     /// the completion provider (no-op if already installed) and requests
     /// markers for the current content immediately, so diagnostics don't
     /// wait for the first edit.
     func activate(app: MainApp, editorURL: URL, content: String) {
+        activeApp = app
         Task {
             _ = try? await (app.monacoInstance as? MonacoImplementation)?
                 .executeCustomScript(dartCompletionProviderScript)
         }
         scheduleAnalysis(app: app, editorURL: editorURL, content: content)
+
+        // Real analyzer-backed IntelliSense (hover/go-to-definition/quick
+        // fixes/completion) — remote only; local files already get the
+        // genuine Monaco LSP bridge via `connectLanguageService` in
+        // MainApp.swift when a local Dart SDK is installed.
+        guard app.workSpaceStorage.remoteConnected else { return }
+        Task {
+            await self.ensureLSPConnection(app: app, editorURL: editorURL)
+            self.notifyLSPDocumentOpenedOrChanged(editorURL: editorURL, content: content)
+        }
     }
 
     /// Call on every content change for the active file (from
@@ -618,6 +838,16 @@ final class DartHybridIntelliSense {
         guard let contentData = content.data(using: .utf8) else { return }
 
         if app.workSpaceStorage.remoteConnected {
+            notifyLSPDocumentOpenedOrChanged(editorURL: editorURL, content: content)
+            if let client = lspClient, client.status == .connected {
+                // The persistent analysis server's own `publishDiagnostics`
+                // notifications (see `onDiagnostics` in
+                // `ensureLSPConnection`) are the live diagnostics source
+                // now. Skip the one-shot `dart analyze` round trip
+                // entirely to avoid duplicate/conflicting markers and an
+                // unnecessary extra SSH session on every keystroke.
+                return
+            }
             guard let connectionInfo = app.workSpaceStorage.currentRemoteConnectionInfo else { return }
             let projectRoot = await dartAnalysisRoot(app: app, forFileURL: editorURL)
             let tempURL = editorURL.deletingLastPathComponent()
@@ -713,8 +943,8 @@ final class DartHybridIntelliSense {
             }
             results.append(
                 DartDiagnostic(
-                    severity: severity, message: String(parts[7]), line: lineNumber, column: column,
-                    length: max(length, 1)))
+                    monacoSeverity: severity.monacoValue, message: String(parts[7]), line: lineNumber,
+                    column: column, length: max(length, 1)))
         }
         return results
     }
@@ -748,10 +978,12 @@ final class DartHybridIntelliSense {
 
         let markersJSON = diagnostics.map { d -> String in
             let escapedMessage = Self.jsEscape(d.message)
+            let endLine = d.endLine ?? d.line
+            let endColumn = d.endColumn ?? (max(d.column, 1) + max(d.length, 1))
             return """
-                {"severity":\(d.severity.monacoValue),"message":"\(escapedMessage)",\
+                {"severity":\(d.monacoSeverity),"message":"\(escapedMessage)",\
                 "startLineNumber":\(d.line),"startColumn":\(max(d.column, 1)),\
-                "endLineNumber":\(d.line),"endColumn":\(max(d.column, 1) + max(d.length, 1))}
+                "endLineNumber":\(endLine),"endColumn":\(endColumn)}
                 """
         }.joined(separator: ",")
 
@@ -800,5 +1032,238 @@ final class DartHybridIntelliSense {
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
+    }
+
+    // MARK: - LSP bridge coordinator
+
+    /// Connects (or reconnects) the persistent Dart Analysis Server client
+    /// for the given file's project. Safe to call on every `activate` —
+    /// it's a no-op if already connected/connecting to the same host +
+    /// project root. Never throws; SDK-not-found and connection failures
+    /// are surfaced as a marker on the current file (never silently) and
+    /// leave the one-shot `dart analyze` fallback fully in charge.
+    private func ensureLSPConnection(app: MainApp, editorURL: URL) async {
+        guard app.workSpaceStorage.remoteConnected,
+            let connectionInfo = app.workSpaceStorage.currentRemoteConnectionInfo
+        else { return }
+
+        let projectRoot = await dartAnalysisRoot(app: app, forFileURL: editorURL)
+        let key = connectionInfo.host.absoluteString + "|" + projectRoot.path
+
+        if lspConnectionKey == key, let client = lspClient,
+            client.status == .connected || client.status == .starting
+        {
+            return  // already connected/connecting to this project
+        }
+
+        lspClient?.disconnect()
+        lspClient = nil
+        lspOpenDocuments.removeAll()
+        lspConnectionKey = key
+        await setLSPConnectedFlag(app: app, connected: false)
+
+        let sdkResult: DartSDKLocator.Result
+        do {
+            sdkResult = try await DartSDKLocator.detect(
+                host: connectionInfo.host, authenticationMode: connectionInfo.authenticationMode)
+        } catch {
+            print("[DartAnalyzer] SDK detection failed: \(error.localizedDescription)")
+            await pushAnalyzerFailureMarker(
+                app: app, editorURL: editorURL,
+                message: "Dart Analyzer: SDK not found. \(error.localizedDescription)")
+            return
+        }
+
+        let client = DartAnalysisServerClient()
+        client.onStatusChange = { [weak self] status in
+            guard let self else { return }
+            Task { @MainActor in
+                guard let app = self.activeApp else { return }
+                await self.setLSPConnectedFlag(app: app, connected: status == .connected)
+            }
+        }
+        client.onDiagnostics = { [weak self] uri, diagnostics in
+            guard let self else { return }
+            Task { @MainActor in
+                guard let app = self.activeApp, let url = self.lspOpenDocuments[uri] else { return }
+                let mapped = diagnostics.map {
+                    DartDiagnostic(
+                        monacoSeverity: $0.monacoSeverity, message: $0.message, line: $0.line,
+                        column: $0.column, length: max($0.endColumn - $0.column, 1),
+                        endLine: $0.endLine, endColumn: $0.endColumn)
+                }
+                await self.pushMarkers(app: app, editorURL: url, diagnostics: mapped)
+            }
+        }
+        lspClient = client
+
+        do {
+            try await client.connect(
+                host: connectionInfo.host, authenticationMode: connectionInfo.authenticationMode,
+                dartExecutable: sdkResult.dartExecutable, projectRootPath: projectRoot.path)
+        } catch {
+            print("[DartAnalyzer] Connection failed: \(error.localizedDescription)")
+            await pushAnalyzerFailureMarker(
+                app: app, editorURL: editorURL,
+                message: "Dart Analyzer: could not start language server. \(error.localizedDescription)")
+        }
+    }
+
+    /// Sends the current buffer to the LSP client (`didOpen` the first
+    /// time a document is seen, `didChange` after that). No-op if the
+    /// client isn't connected yet — the caller doesn't need to check.
+    private func notifyLSPDocumentOpenedOrChanged(editorURL: URL, content: String) {
+        guard let client = lspClient, client.status == .connected else { return }
+        let uri = Self.lspURI(for: editorURL)
+        if lspOpenDocuments[uri] == nil {
+            lspOpenDocuments[uri] = editorURL
+            client.didOpen(uri: uri, text: content)
+        } else {
+            client.didChange(uri: uri, text: content)
+        }
+    }
+
+    /// Maps a Monaco/editor URL for a remote file (`sftp://host/path...`)
+    /// to the URI the REMOTE analysis server needs (`file:///path...`,
+    /// using the path as seen on the Android/Termux host itself) — the
+    /// URI/path mapping the Dart LSP integration requirement calls for.
+    private static func lspURI(for editorURL: URL) -> String {
+        "file://" + editorURL.path
+    }
+
+    private func setLSPConnectedFlag(app: MainApp, connected: Bool) async {
+        guard let monaco = app.monacoInstance as? MonacoImplementation else { return }
+        _ = try? await monaco.executeCustomScript("window.__dartLSPConnected = \(connected ? "true" : "false");")
+    }
+
+    /// Called from `MainApp`'s existing `onRemoteDisconnect` hook so a live
+    /// LSP session doesn't linger (and so stale hover/completion requests
+    /// don't hang) after the SSH link drops. Also called by the one existing
+    /// remote-disconnect handler in MainApp.swift, not a new one.
+    func handleRemoteDisconnect() {
+        guard lspClient != nil else { return }
+        print("[DartAnalyzer] SSH disconnected")
+        lspClient?.disconnect()
+        lspClient = nil
+        lspConnectionKey = nil
+        lspOpenDocuments.removeAll()
+        if let app = activeApp {
+            Task { await self.setLSPConnectedFlag(app: app, connected: false) }
+        }
+    }
+
+    /// Entry point for the "Dart LSP Request" bridge message forwarded
+    /// from `MonacoImplementation`'s script message handler. Handles
+    /// hover / definition / completion / codeAction / openFile requests
+    /// from the JS providers registered in `dartCompletionProviderScript`,
+    /// and always resolves the JS-side pending promise — never leaves it
+    /// hanging (the JS side also has its own timeout as a second safety
+    /// net).
+    func handleBridgeRequest(_ message: [String: AnyObject]) {
+        guard let id = (message["id"] as? NSNumber)?.intValue ?? (message["id"] as? Int),
+            let kind = message["kind"] as? String,
+            let payload = message["payload"] as? [String: AnyObject]
+        else { return }
+
+        Task { @MainActor in
+            guard let app = self.activeApp, let client = self.lspClient, client.status == .connected else {
+                await self.resolveBridgeRequest(id: id, result: nil)
+                return
+            }
+
+            switch kind {
+            case "hover", "definition", "completion":
+                guard let uri = payload["uri"] as? String,
+                    let line = (payload["line"] as? NSNumber)?.intValue ?? (payload["line"] as? Int),
+                    let character = (payload["character"] as? NSNumber)?.intValue
+                        ?? (payload["character"] as? Int)
+                else {
+                    await self.resolveBridgeRequest(id: id, result: nil)
+                    return
+                }
+                switch kind {
+                case "hover":
+                    let hover = await client.hover(uri: uri, line: line, character: character)
+                    await self.resolveBridgeRequest(id: id, result: hover.map { ["contents": $0.contents] })
+                case "definition":
+                    let defs = await client.definition(uri: uri, line: line, character: character)
+                    let arr = defs.map { d -> [String: Any] in
+                        ["uri": "file://" + d.path, "line": d.line, "column": d.column]
+                    }
+                    await self.resolveBridgeRequest(id: id, result: arr)
+                default:  // "completion"
+                    let items = await client.completion(uri: uri, line: line, character: character)
+                    let arr = items.map { c -> [String: Any] in
+                        [
+                            "label": c.label, "kind": c.kind, "detail": c.detail ?? "",
+                            "documentation": c.documentation ?? "", "insertText": c.insertText ?? c.label,
+                        ]
+                    }
+                    await self.resolveBridgeRequest(id: id, result: arr)
+                }
+            case "codeAction":
+                guard let uri = payload["uri"] as? String,
+                    let startLine = (payload["startLine"] as? NSNumber)?.intValue,
+                    let startCharacter = (payload["startCharacter"] as? NSNumber)?.intValue,
+                    let endLine = (payload["endLine"] as? NSNumber)?.intValue,
+                    let endCharacter = (payload["endCharacter"] as? NSNumber)?.intValue
+                else {
+                    await self.resolveBridgeRequest(id: id, result: nil)
+                    return
+                }
+                let messages = (payload["diagnosticMessages"] as? [String]) ?? []
+                let actions = await client.codeActions(
+                    uri: uri, startLine: startLine, startCharacter: startCharacter, endLine: endLine,
+                    endCharacter: endCharacter, diagnosticMessages: messages)
+                let arr = actions.map { a -> [String: Any] in
+                    [
+                        "title": a.title,
+                        "edits": a.edits.map { e -> [String: Any] in
+                            [
+                                "startLine": e.startLine, "startColumn": e.startColumn,
+                                "endLine": e.endLine, "endColumn": e.endColumn, "newText": e.newText,
+                            ]
+                        },
+                    ]
+                }
+                await self.resolveBridgeRequest(id: id, result: arr)
+            case "openFile":
+                // Cross-file go-to-definition: the target file isn't open
+                // as a Monaco model yet, so ask the app to open it as a
+                // new tab (reusing the existing `openFile`, not a new file
+                // -opening path) before the JS side retries resolving the
+                // definition against the now-loaded model.
+                guard let path = payload["path"] as? String,
+                    let host = app.workSpaceStorage.currentRemoteConnectionInfo?.host,
+                    var components = URLComponents(url: host, resolvingAgainstBaseURL: false)
+                else {
+                    await self.resolveBridgeRequest(id: id, result: nil)
+                    return
+                }
+                components.path = path
+                if let url = components.url {
+                    app.openFile(url: url)
+                }
+                await self.resolveBridgeRequest(id: id, result: ["ok": true])
+            default:
+                await self.resolveBridgeRequest(id: id, result: nil)
+            }
+        }
+    }
+
+    private func resolveBridgeRequest(id: Int, result: Any?) async {
+        guard let app = activeApp, let monaco = app.monacoInstance as? MonacoImplementation else { return }
+        guard let result = result else {
+            _ = try? await monaco.executeCustomScript("window.__dartBridgeResolve(\(id), null)")
+            return
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: result, options: []) else {
+            _ = try? await monaco.executeCustomScript("window.__dartBridgeResolve(\(id), null)")
+            return
+        }
+        let base64 = data.base64EncodedString()
+        let script =
+            "window.__dartBridgeResolve(\(id), decodeURIComponent(escape(window.atob('\(base64)'))))"
+        _ = try? await monaco.executeCustomScript(script)
     }
 }

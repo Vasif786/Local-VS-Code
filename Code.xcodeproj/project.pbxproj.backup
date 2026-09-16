@@ -533,7 +533,6 @@
 		9FE3E2AC298A169B00F63DD0 /* SwiftGit2 in Frameworks */ = {isa = PBXBuildFile; productRef = 9FE3E2AB298A169A00F63DD0 /* SwiftGit2 */; };
 		9FE3E2AD298A16A300F63DD0 /* NMSSH.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 942E321128093CA600233441 /* NMSSH.xcframework */; };
 		A2B57D2E74A8348AE903D96E /* SimulatorWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69404B7EF47F4AA2B54BEB37 /* SimulatorWindowView.swift */; };
-		E0FF19C23CB66785799EA697 /* DartAnalysisServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13C3CB9AF59CA6324E88399 /* DartAnalysisServerClient.swift */; };
 		FFD081B82925F8FB001D9373 /* TextEditorWithPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD081B72925F8FB001D9373 /* TextEditorWithPlaceholder.swift */; };
 		FFD081B92925F8FB001D9373 /* TextEditorWithPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD081B72925F8FB001D9373 /* TextEditorWithPlaceholder.swift */; };
 		FFD081BB29260B00001D9373 /* Libgit2Error.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD081BA29260B00001D9373 /* Libgit2Error.swift */; };
@@ -894,7 +893,6 @@
 		9FE3E292298A14BC00F63DD0 /* CodeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9FE3E294298A14BC00F63DD0 /* CodeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeUITests.swift; sourceTree = "<group>"; };
 		AFE4A1FE6755F9869CCB7011 /* SimulatorManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SimulatorManager.swift; sourceTree = "<group>"; };
-		B13C3CB9AF59CA6324E88399 /* DartAnalysisServerClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DartAnalysisServerClient.swift; path = CodeApp/Managers/DartAnalysisServerClient.swift; sourceTree = "<group>"; };
 		BF55BF3846C8E3D1B4B2FD28 /* IPhone13WebViewTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IPhone13WebViewTest.swift; sourceTree = "<group>"; };
 		EADA2498A348ACB44EB90EB2 /* IPhone13SimulatorButton.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IPhone13SimulatorButton.swift; sourceTree = "<group>"; };
 		F5FA49BDF87882DF256A5E2D /* RemoteRunExtension.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RemoteRunExtension.swift; path = RemoteRunExtension.swift; sourceTree = "<group>"; };
@@ -1620,7 +1618,6 @@
 				49EB482B587F228D42C7A1A2 /* IPhone13TestScreen.swift */,
 				BF55BF3846C8E3D1B4B2FD28 /* IPhone13WebViewTest.swift */,
 				1FC68ECF41D2889BB44DFF70 /* IPhone13StandalonePreview.swift */,
-				B13C3CB9AF59CA6324E88399 /* DartAnalysisServerClient.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -2426,7 +2423,6 @@
 				769E18CEAA4AB5AFEAB7725D /* SimulatorManager.swift in Sources */,
 				A2B57D2E74A8348AE903D96E /* SimulatorWindowView.swift in Sources */,
 				890422CE574C82369F6BF61A /* SimulatorExtension.swift in Sources */,
-				E0FF19C23CB66785799EA697 /* DartAnalysisServerClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

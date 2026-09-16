@@ -296,6 +296,7 @@ class MainApp: ObservableObject {
             guard let self = self else { return }
             Task { @MainActor in
                 self.remoteExecutionManager.handleDisconnect()
+                DartHybridIntelliSense.shared.handleRemoteDisconnect()
                 let documentDir = getRootDirectory()
                 self.loadFolder(url: documentDir)
             }
