@@ -50,6 +50,14 @@ private let dartCompletionProviderScript = #"""
     if (window.__codeappDartProviderInstalled) { return; }
     window.__codeappDartProviderInstalled = true;
 
+    // Markers (from pushMarkers/pushAnalyzerFailureMarker below) already get
+    // an inline squiggly underline and a hover tooltip for free from Monaco.
+    // The gutter icon next to the line ("red cross") additionally requires
+    // glyphMargin to be enabled — it's off by default.
+    if (typeof editor !== "undefined" && editor.updateOptions) {
+        editor.updateOptions({ glyphMargin: true, renderValidationDecorations: "on" });
+    }
+
     // Extend these tables to add more symbols — no other code needs to change.
     var DART_KEYWORDS = ["abstract","as","assert","async","await","break","case",
         "catch","class","const","continue","covariant","default","deferred","do",
@@ -684,7 +692,8 @@ private final class LocalDartAnalyzeRunner {
 
             let quotedRoot = Self.shellQuoted(root.path)
             let quotedFile = Self.shellQuoted(file.path)
-            let analyzeCommand = useFlutter ? "flutter analyze --machine" : "dart analyze --format=machine"
+            let analyzeCommand =
+                useFlutter ? "flutter analyze --no-preamble --no-congratulate" : "dart analyze --format=machine"
             executor.dispatch(
                 command: "cd \(quotedRoot) && \(analyzeCommand) \(quotedFile) 2>&1"
             ) { _ in
@@ -872,7 +881,9 @@ final class DartHybridIntelliSense {
             }
 
             let useFlutterAnalyze = Self.isInLibFolder(projectRoot: projectRoot, fileURL: editorURL)
-            let analyzeCommand = useFlutterAnalyze ? "flutter analyze --machine" : "dart analyze --format=machine"
+            let analyzeCommand =
+                useFlutterAnalyze
+                ? "flutter analyze --no-preamble --no-congratulate" : "dart analyze --format=machine"
             let command = "cd \(quotedRoot) && \(analyzeCommand) \(quotedRelativeTemp) 2>&1"
             let output: String
             do {
@@ -885,7 +896,10 @@ final class DartHybridIntelliSense {
             }
 
             guard generation == self.generation else { return }
-            let diagnostics = Self.parseMachineOutput(output, matchingFileSuffix: relativeTempPath)
+            let diagnostics =
+                useFlutterAnalyze
+                ? Self.parseFlutterAnalyzeOutput(output, matchingFileSuffix: relativeTempPath)
+                : Self.parseMachineOutput(output, matchingFileSuffix: relativeTempPath)
             if diagnostics.isEmpty, let reason = Self.analyzerFailureReason(from: output) {
                 await pushAnalyzerFailureMarker(
                     app: app, editorURL: editorURL,
@@ -910,7 +924,10 @@ final class DartHybridIntelliSense {
             try? FileManager.default.removeItem(at: tempURL)
             guard generation == self.generation else { return }
 
-            let diagnostics = Self.parseMachineOutput(output, matchingFileSuffix: tempURL.path)
+            let diagnostics =
+                useFlutterAnalyze
+                ? Self.parseFlutterAnalyzeOutput(output, matchingFileSuffix: tempURL.path)
+                : Self.parseMachineOutput(output, matchingFileSuffix: tempURL.path)
             if diagnostics.isEmpty, let reason = Self.analyzerFailureReason(from: output) {
                 await pushAnalyzerFailureMarker(
                     app: app, editorURL: editorURL,
@@ -975,6 +992,54 @@ final class DartHybridIntelliSense {
     /// Flutter-specific lints/checks that `dart analyze` alone does not.
     /// Files elsewhere in the project (`bin/`, `test/`, etc.) keep using
     /// `dart analyze`.
+    /// Parses `flutter analyze --no-preamble --no-congratulate` output.
+    ///
+    /// IMPORTANT: unlike `dart analyze`, `flutter analyze` has no
+    /// `--machine`/`--format=machine` flag (this was a long-requested
+    /// Flutter tooling feature that was never consistently shipped) — an
+    /// earlier version of this file incorrectly assumed one existed, which
+    /// is why `flutter analyze` diagnostics silently never showed up.
+    /// Its real output, with the banner and the "No issues found!"/"N
+    /// issues found." summary suppressed by the two flags above, is one
+    /// diagnostic per line in the human-readable bullet format:
+    ///   info • Name types using UpperCamelCase • lib/main.dart:5:7 • camel_case_types
+    ///   warning • Unused import: 'dart:async' • lib/main.dart:2:8 • unused_import
+    /// i.e. `severity • message • file:line:col • rule_name`, separated by
+    /// " • " (U+2022 BULLET). A clean file with both flags produces no
+    /// output at all.
+    private static func parseFlutterAnalyzeOutput(_ output: String, matchingFileSuffix: String) -> [DartDiagnostic] {
+        var results: [DartDiagnostic] = []
+        for rawLine in output.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let parts = line.components(separatedBy: " • ")
+            guard parts.count >= 3 else { continue }  // not a diagnostic line — skip silently, don't misparse banner/summary text
+
+            let monacoSeverity: Int
+            switch parts[0].lowercased() {
+            case "error": monacoSeverity = 8
+            case "warning": monacoSeverity = 4
+            case "info": monacoSeverity = 2
+            default: continue  // unrecognized first field — not actually a diagnostic line
+            }
+
+            // Location field is "path:line:col" — split from the right so a
+            // colon-containing path (unlikely, but possible) doesn't break this.
+            let locationParts = parts[2].split(separator: ":")
+            guard locationParts.count >= 3,
+                let column = Int(locationParts[locationParts.count - 1]),
+                let lineNumber = Int(locationParts[locationParts.count - 2])
+            else { continue }
+            let filePath = locationParts.dropLast(2).joined(separator: ":")
+            guard filePath.hasSuffix(matchingFileSuffix) else { continue }
+
+            results.append(
+                DartDiagnostic(
+                    monacoSeverity: monacoSeverity, message: parts[1], line: lineNumber, column: column,
+                    length: 1))
+        }
+        return results
+    }
+
     private static func isInLibFolder(projectRoot: URL, fileURL: URL) -> Bool {
         let rootPath = projectRoot.path.hasSuffix("/") ? projectRoot.path : projectRoot.path + "/"
         guard fileURL.path.hasPrefix(rootPath) else { return false }
