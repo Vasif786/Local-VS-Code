@@ -59,15 +59,27 @@ private let dartCompletionProviderScript = #"""
     }
 
     // Finds the Monaco model diagnostics/failure markers are actually FOR,
-    // given the URI/path Swift computed. Real matching is tried first;
-    // the currently active editor is only ever a LAST-RESORT guess (and
-    // only when its own filename plausibly matches), because blindly
-    // preferring "whatever tab is visible right now" — which this used to
-    // do unconditionally — meant diagnostics computed for one file could
-    // land on a completely different file just because it happened to be
-    // the active tab when the (async) result came back. That
-    // misattribution is the exact "correct code shows a false error" bug.
+    // given the URI/path Swift computed.
     window.__dartFindModel = function (uriString, pathString) {
+        // Fast path covering the overwhelming common case: the file these
+        // diagnostics are for IS the currently active editor. Checked by
+        // exact path/URI match (not just filename) so this behaves exactly
+        // like it always has for a single open file, without depending on
+        // assumptions about Monaco's internal model URI scheme.
+        if (typeof editor !== "undefined" && editor.getModel) {
+            var active = editor.getModel();
+            if (active) {
+                var activePath = active.uri.path || "";
+                if (activePath === pathString || active.uri.toString() === uriString) {
+                    return active;
+                }
+            }
+        }
+
+        // The active tab is a DIFFERENT file than these diagnostics are
+        // for (e.g. the user switched tabs while an async analysis/LSP
+        // result was still in flight) — find the real target model
+        // instead of mis-attaching diagnostics to whatever's visible now.
         var model = null;
         try { model = monaco.editor.getModel(monaco.Uri.parse(uriString)); } catch (e) {}
         if (model) { return model; }
@@ -76,15 +88,6 @@ private let dartCompletionProviderScript = #"""
         for (var i = 0; i < all.length; i++) {
             var u = all[i].uri;
             if (u.toString() === uriString || u.path === pathString) { return all[i]; }
-        }
-
-        if (typeof editor !== "undefined" && editor.getModel) {
-            var active = editor.getModel();
-            if (active) {
-                var wantedName = (pathString || "").split("/").pop();
-                var activeName = (active.uri.path || "").split("/").pop();
-                if (wantedName && activeName === wantedName) { return active; }
-            }
         }
         return null;
     };
@@ -903,15 +906,6 @@ final class DartHybridIntelliSense {
             }
             guard let connectionInfo = app.workSpaceStorage.currentRemoteConnectionInfo else { return }
             let projectRoot = await dartAnalysisRoot(app: app, forFileURL: editorURL)
-            guard await fileExistsOnRemote(app: app, directory: projectRoot, relativePath: ".dart_tool/package_config.json")
-            else {
-                await pushAnalyzerFailureMarker(
-                    app: app, editorURL: editorURL,
-                    message:
-                        "Packages aren't resolved for this project yet. Run 'flutter pub get' (or 'dart pub get') in \(projectRoot.path) in the terminal, then edit the file again."
-                )
-                return
-            }
             let tempURL = editorURL.deletingLastPathComponent()
                 .appendingPathComponent("." + editorURL.deletingPathExtension().lastPathComponent + Self.tempFileSuffix)
             let rootPath = projectRoot.path
@@ -1205,23 +1199,6 @@ final class DartHybridIntelliSense {
         lspOpenDocuments.removeAll()
         lspConnectionKey = key
         await setLSPConnectedFlag(app: app, connected: false)
-
-        guard await fileExistsOnRemote(app: app, directory: projectRoot, relativePath: ".dart_tool/package_config.json")
-        else {
-            // The single most common cause of "correct code shows as an
-            // error": if packages were never resolved, EVERY import
-            // (including `package:flutter/material.dart`) fails to
-            // resolve, which cascades into diagnostics on otherwise
-            // perfectly valid code. Catching this explicitly, with an
-            // actionable message, beats letting it manifest as confusing
-            // "target of URI doesn't exist" spam on unrelated lines.
-            await pushAnalyzerFailureMarker(
-                app: app, editorURL: editorURL,
-                message:
-                    "Packages aren't resolved for this project yet. Run 'flutter pub get' (or 'dart pub get') in \(projectRoot.path) in the terminal, then edit the file again."
-            )
-            return
-        }
 
         let sdkResult: DartSDKLocator.Result
         do {
