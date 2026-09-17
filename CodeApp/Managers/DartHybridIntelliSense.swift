@@ -58,6 +58,37 @@ private let dartCompletionProviderScript = #"""
         editor.updateOptions({ glyphMargin: true, renderValidationDecorations: "on" });
     }
 
+    // Finds the Monaco model diagnostics/failure markers are actually FOR,
+    // given the URI/path Swift computed. Real matching is tried first;
+    // the currently active editor is only ever a LAST-RESORT guess (and
+    // only when its own filename plausibly matches), because blindly
+    // preferring "whatever tab is visible right now" — which this used to
+    // do unconditionally — meant diagnostics computed for one file could
+    // land on a completely different file just because it happened to be
+    // the active tab when the (async) result came back. That
+    // misattribution is the exact "correct code shows a false error" bug.
+    window.__dartFindModel = function (uriString, pathString) {
+        var model = null;
+        try { model = monaco.editor.getModel(monaco.Uri.parse(uriString)); } catch (e) {}
+        if (model) { return model; }
+
+        var all = monaco.editor.getModels();
+        for (var i = 0; i < all.length; i++) {
+            var u = all[i].uri;
+            if (u.toString() === uriString || u.path === pathString) { return all[i]; }
+        }
+
+        if (typeof editor !== "undefined" && editor.getModel) {
+            var active = editor.getModel();
+            if (active) {
+                var wantedName = (pathString || "").split("/").pop();
+                var activeName = (active.uri.path || "").split("/").pop();
+                if (wantedName && activeName === wantedName) { return active; }
+            }
+        }
+        return null;
+    };
+
     // Extend these tables to add more symbols — no other code needs to change.
     var DART_KEYWORDS = ["abstract","as","assert","async","await","break","case",
         "catch","class","const","continue","covariant","default","deferred","do",
@@ -872,6 +903,15 @@ final class DartHybridIntelliSense {
             }
             guard let connectionInfo = app.workSpaceStorage.currentRemoteConnectionInfo else { return }
             let projectRoot = await dartAnalysisRoot(app: app, forFileURL: editorURL)
+            guard await fileExistsOnRemote(app: app, directory: projectRoot, relativePath: ".dart_tool/package_config.json")
+            else {
+                await pushAnalyzerFailureMarker(
+                    app: app, editorURL: editorURL,
+                    message:
+                        "Packages aren't resolved for this project yet. Run 'flutter pub get' (or 'dart pub get') in \(projectRoot.path) in the terminal, then edit the file again."
+                )
+                return
+            }
             let tempURL = editorURL.deletingLastPathComponent()
                 .appendingPathComponent("." + editorURL.deletingPathExtension().lastPathComponent + Self.tempFileSuffix)
             let rootPath = projectRoot.path
@@ -1095,15 +1135,7 @@ final class DartHybridIntelliSense {
         let path = Self.jsEscape(editorURL.path)
         let script = """
         (function() {
-          var model = null;
-          if (typeof editor !== "undefined" && editor.getModel) model = editor.getModel();
-          if (!model) { try { model = monaco.editor.getModel(monaco.Uri.parse("\(uri)")); } catch (_) {} }
-          if (!model) {
-            var all = monaco.editor.getModels();
-            for (var i = 0; i < all.length; i++) {
-              if (all[i].uri.path === \"\(path)\") { model = all[i]; break; }
-            }
-          }
+          var model = window.__dartFindModel ? window.__dartFindModel("\(uri)", "\(path)") : null;
           if (model) monaco.editor.setModelMarkers(model, "dart-analyzer", [{
             severity: 8, message: "\(msg)", startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1
           }]);
@@ -1130,34 +1162,7 @@ final class DartHybridIntelliSense {
         let escapedPath = Self.jsEscape(editorURL.path)
         let script = """
             (function() {
-                var uriString = "\(escapedURI)";
-                var pathString = "\(escapedPath)";
-                var model = null;
-
-                // For SSH/SFTP documents, the URL used by Swift and the URI
-                // Monaco normalizes internally are not always byte-for-byte
-                // identical. Prefer the currently visible editor model first:
-                // this is the file whose unsaved buffer was just analyzed.
-                if (typeof editor !== "undefined" && editor.getModel) {
-                    model = editor.getModel();
-                }
-
-                if (!model) {
-                    try { model = monaco.editor.getModel(monaco.Uri.parse(uriString)); } catch (_) {}
-                }
-
-                if (!model) {
-                    var all = monaco.editor.getModels();
-                    for (var i = 0; i < all.length; i++) {
-                        var u = all[i].uri;
-                        if (u.toString() === uriString || u.path === pathString ||
-                            u.toString().indexOf(uriString) >= 0 || uriString.indexOf(u.toString()) >= 0) {
-                            model = all[i];
-                            break;
-                        }
-                    }
-                }
-
+                var model = window.__dartFindModel ? window.__dartFindModel("\(escapedURI)", "\(escapedPath)") : null;
                 if (!model) { return; }
                 monaco.editor.setModelMarkers(model, "dart-analyzer", [\(markersJSON)]);
             })();
@@ -1200,6 +1205,23 @@ final class DartHybridIntelliSense {
         lspOpenDocuments.removeAll()
         lspConnectionKey = key
         await setLSPConnectedFlag(app: app, connected: false)
+
+        guard await fileExistsOnRemote(app: app, directory: projectRoot, relativePath: ".dart_tool/package_config.json")
+        else {
+            // The single most common cause of "correct code shows as an
+            // error": if packages were never resolved, EVERY import
+            // (including `package:flutter/material.dart`) fails to
+            // resolve, which cascades into diagnostics on otherwise
+            // perfectly valid code. Catching this explicitly, with an
+            // actionable message, beats letting it manifest as confusing
+            // "target of URI doesn't exist" spam on unrelated lines.
+            await pushAnalyzerFailureMarker(
+                app: app, editorURL: editorURL,
+                message:
+                    "Packages aren't resolved for this project yet. Run 'flutter pub get' (or 'dart pub get') in \(projectRoot.path) in the terminal, then edit the file again."
+            )
+            return
+        }
 
         let sdkResult: DartSDKLocator.Result
         do {
